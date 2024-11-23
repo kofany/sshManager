@@ -270,9 +270,19 @@ func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
-		// Wyświetl listę haseł do wyboru
+		// Inicjalizacja tymczasowego hosta
+		v.tmpHost = &models.Host{
+			Name:        v.inputs[0].Value(),
+			Description: v.inputs[1].Value(),
+			Login:       v.inputs[2].Value(),
+			IP:          v.inputs[3].Value(),
+			Port:        v.inputs[4].Value(),
+		}
+
+		// Przejdź do trybu wyboru hasła
 		v.mode = modeSelectPassword
 		v.passwordList = passwords
+		v.selectedPasswordIndex = 0 // Ustaw początkowy indeks wybranego hasła
 		return v, nil
 	} else {
 		// Walidacja pól hasła
@@ -281,21 +291,22 @@ func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
-		// Tworzenie nowego hasła
-		password := &models.Password{
-			Description: v.inputs[0].Value(),
-			Password:    v.inputs[1].Value(),
-		}
-
-		var err interface{}
-		if v.currentPassword != nil {
-			err = v.model.UpdatePassword(v.currentPassword.Description, password)
-		} else {
-			err = v.model.AddPassword(password)
-		}
-
+		// Szyfrowanie hasła przy użyciu obiektu Cipher
+		password, err := models.NewPassword(v.inputs[0].Value(), v.inputs[1].Value(), v.model.GetCipher())
 		if err != nil {
-			v.errMsg = fmt.Sprint(err)
+			v.errMsg = fmt.Sprintf("Błąd podczas tworzenia hasła: %v", err)
+			return v, nil
+		}
+
+		var opErr interface{}
+		if v.currentPassword != nil {
+			opErr = v.model.UpdatePassword(v.currentPassword.Description, password)
+		} else {
+			opErr = v.model.AddPassword(password)
+		}
+
+		if opErr != nil {
+			v.errMsg = fmt.Sprint(opErr)
 			return v, nil
 		}
 
@@ -307,7 +318,7 @@ func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 	}
 
 	// Aktualizacja list po zapisie
-	v.model.UpdateLists(v.model.GetHosts(), v.model.GetPasswords())
+	v.model.UpdateLists()
 	v.model.SetStatus("Zapisano pomyślnie", false)
 	v.editing = false
 	v.resetState()
@@ -379,7 +390,7 @@ func (v *editView) saveHostWithPassword() (tea.Model, tea.Cmd) {
 	}
 
 	v.mode = modeNormal
-	v.model.UpdateLists(v.model.GetHosts(), v.model.GetPasswords())
+	v.model.UpdateLists()
 	v.model.SetStatus("Zapisano pomyślnie", false)
 	v.editing = false
 	v.resetState()

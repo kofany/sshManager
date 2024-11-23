@@ -6,10 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sshManager/internal/crypto"
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/views"
 
+	"syscall"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 type mode int
@@ -72,6 +76,18 @@ func main() {
 	flag.Parse()
 
 	m := initialModel()
+
+	// Pytanie o klucz szyfrowania
+	fmt.Print("Wprowadź klucz szyfrowania: ")
+	bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		fmt.Printf("Błąd podczas odczytu klucza szyfrowania: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println()
+
+	cipher := crypto.NewCipher(string(bytePassword))
+	m.uiModel.SetCipher(cipher)
 
 	// Ustawienie początkowego widoku na podstawie flag
 	if *editMode {

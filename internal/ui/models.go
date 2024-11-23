@@ -5,6 +5,7 @@ package ui
 import (
 	"fmt"
 	"sshManager/internal/config"
+	"sshManager/internal/crypto"
 	"sshManager/internal/models"
 	"sshManager/internal/ssh"
 
@@ -105,6 +106,7 @@ type Model struct {
 	height       int
 	quitting     bool
 	config       *config.Manager
+	cipher       *crypto.Cipher
 }
 
 // Init implementuje tea.Model
@@ -221,7 +223,7 @@ func NewModel() Model {
 	// Załaduj dane do modelu
 	m.hosts = configManager.GetHosts()
 	m.passwords = configManager.GetPasswords()
-	m.UpdateLists(m.hosts, m.passwords)
+	m.UpdateLists()
 
 	return m
 }
@@ -245,18 +247,24 @@ func initializeList(title string) list.Model {
 }
 
 // UpdateLists aktualizuje listy hostów i haseł
-func (m *Model) UpdateLists(hosts []models.Host, passwords []models.Password) {
-	m.hosts = hosts
-	m.passwords = passwords
+// internal/ui/models.go
 
+// UpdateLists aktualizuje listy hostów i haseł
+func (m *Model) UpdateLists() {
+	// Pobierz aktualne dane z konfiguracji
+	m.hosts = m.config.GetHosts()
+	m.passwords = m.config.GetPasswords()
+
+	// Aktualizacja listy hostów
 	var hostItems []list.Item
-	for _, h := range hosts {
+	for _, h := range m.hosts {
 		hostItems = append(hostItems, HostItem{host: h})
 	}
 	m.hostList.SetItems(hostItems)
 
+	// Aktualizacja listy haseł
 	var passwordItems []list.Item
-	for _, p := range passwords {
+	for _, p := range m.passwords {
 		passwordItems = append(passwordItems, PasswordItem{password: p})
 	}
 	m.passwordList.SetItems(passwordItems)
@@ -364,13 +372,17 @@ func (m *Model) SetActiveView(view View) {
 // AddHost dodaje nowego hosta
 func (m *Model) AddHost(host *models.Host) interface{} {
 	// Sprawdzenie czy host o takiej nazwie już istnieje
-	for _, h := range m.hosts {
+	for _, h := range m.config.GetHosts() {
 		if h.Name == host.Name {
 			return fmt.Errorf("host o nazwie %s już istnieje", host.Name)
 		}
 	}
 
-	m.hosts = append(m.hosts, *host)
+	// Dodaj hosta do konfiguracji
+	m.config.AddHost(*host)
+
+	// Zaktualizuj lokalną listę hostów
+	m.hosts = m.config.GetHosts()
 	return nil
 }
 
@@ -386,15 +398,25 @@ func (m *Model) UpdateHost(oldName string, host *models.Host) interface{} {
 }
 
 // AddPassword dodaje nowe hasło
+
 func (m *Model) AddPassword(password *models.Password) interface{} {
 	// Sprawdzenie czy hasło o takim opisie już istnieje
-	for _, p := range m.passwords {
+	for _, p := range m.config.GetPasswords() {
 		if p.Description == password.Description {
 			return fmt.Errorf("hasło o opisie %s już istnieje", password.Description)
 		}
 	}
 
-	m.passwords = append(m.passwords, *password)
+	// Dodaj hasło do konfiguracji
+	m.config.AddPassword(*password)
+
+	// Zapisz konfigurację
+	if err := m.config.Save(); err != nil {
+		return fmt.Errorf("nie udało się zapisać konfiguracji: %v", err)
+	}
+
+	// Aktualizuj lokalną listę haseł
+	m.passwords = m.config.GetPasswords()
 	return nil
 }
 
@@ -427,4 +449,12 @@ func (m *Model) GetPasswordByIndex(index int) *models.Password {
 		return &m.passwords[index]
 	}
 	return nil
+}
+
+func (m *Model) SetCipher(cipher *crypto.Cipher) {
+	m.cipher = cipher
+}
+
+func (m *Model) GetCipher() *crypto.Cipher {
+	return m.cipher
 }
