@@ -86,3 +86,12 @@ func ValidateKey(cipher *Cipher, testData string) bool {
 
 	return decrypted == "test"
 }
+
+func GenerateKeyFromPassword(password string) []byte {
+	// Dopełnij hasło do 32 bajtów
+	paddedPass := make([]byte, 32)
+	copy(paddedPass, []byte(password))
+
+	// Zakoduj using base64
+	return []byte(base64.URLEncoding.EncodeToString(paddedPass)[:32])
+}

@@ -12,6 +12,10 @@ var (
 	highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
 	special   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
 	error     = lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF0000"}
+	Subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
+	Highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
+	Special   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
+	Error     = lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF0000"}
 
 	// Style podstawowe
 	BaseStyle = lipgloss.NewStyle().
@@ -75,6 +79,22 @@ var (
 
 	CellStyle = lipgloss.NewStyle().
 			Padding(0, 1)
+
+		// Dialog styles
+	DialogStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(highlight).
+			Padding(1, 2)
+
+	DialogTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(highlight).
+				Padding(0, 1)
+
+	DialogButtonStyle = lipgloss.NewStyle().
+				Background(highlight).
+				Foreground(lipgloss.Color("0")).
+				Padding(0, 2)
 )
 
 // GetMaxWidth zwraca maksymalną szerokość tekstu w slice'u

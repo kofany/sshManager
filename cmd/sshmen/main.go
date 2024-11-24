@@ -6,10 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sshManager/internal/config"
 	"sshManager/internal/crypto"
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/views"
-
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -48,6 +48,20 @@ func (m *programModel) Init() tea.Cmd {
 	return m.currentView.Init()
 }
 
+// Dodajmy nową metodę do aktualizacji widoku
+func (m *programModel) updateCurrentView() {
+	switch m.uiModel.GetActiveView() {
+	case ui.ViewMain:
+		m.currentView = views.NewMainView(m.uiModel)
+	case ui.ViewConnect:
+		m.currentView = views.NewConnectView(m.uiModel)
+	case ui.ViewEdit:
+		m.currentView = views.NewEditView(m.uiModel)
+	case ui.ViewTransfer:
+		m.currentView = views.NewTransferView(m.uiModel)
+	}
+}
+
 func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -58,48 +72,71 @@ func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Zapisz aktualny widok
+	currentActiveView := m.uiModel.GetActiveView()
+
+	// Aktualizuj obecny widok
 	var cmd tea.Cmd
 	m.currentView, cmd = m.currentView.Update(msg)
+
+	// Sprawdź czy zmienił się aktywny widok
+	if currentActiveView != m.uiModel.GetActiveView() {
+		m.updateCurrentView()
+	}
+
 	return m, cmd
 }
 
 func (m *programModel) View() string {
 	if m.quitting {
-		return "Do widzenia!\n"
+		return "Goodbye!\n"
 	}
 	return m.currentView.View()
 }
 
 func main() {
+	// Parsowanie flag linii komend
 	editMode := flag.Bool("edit", false, "Edit mode")
 	transferMode := flag.Bool("file-transfer", false, "File transfer mode")
 	flag.Parse()
 
-	m := initialModel()
+	// Pokaż informację o lokalizacji pliku konfiguracyjnego
+	configPath, err := config.GetDefaultConfigPath()
+	if err != nil {
+		fmt.Printf("Warning: Could not determine config path: %v\n", err)
+		configPath = config.DefaultConfigFileName // Teraz będzie działać
+	}
+	fmt.Printf("Using config file: %s\n", configPath)
 
-	// Pytanie o klucz szyfrowania
-	fmt.Print("Wprowadź klucz szyfrowania: ")
+	// Wczytanie klucza szyfrowania
+	fmt.Print("Enter encryption key: ")
 	bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
 	if err != nil {
-		fmt.Printf("Błąd podczas odczytu klucza szyfrowania: %v\n", err)
+		fmt.Printf("Error reading encryption key: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println()
 
-	cipher := crypto.NewCipher(string(bytePassword))
+	// Inicjalizacja szyfru
+	key := crypto.GenerateKeyFromPassword(string(bytePassword))
+	cipher := crypto.NewCipher(string(key))
+
+	// Inicjalizacja modelu UI
+	m := initialModel()
 	m.uiModel.SetCipher(cipher)
 
 	// Ustawienie początkowego widoku na podstawie flag
 	if *editMode {
 		m.mode = modeEdit
 		m.uiModel.SetActiveView(ui.ViewEdit)
-		m.currentView = views.NewEditView(m.uiModel)
+		m.updateCurrentView()
 	} else if *transferMode {
 		m.mode = modeTransfer
 		m.uiModel.SetActiveView(ui.ViewTransfer)
-		m.currentView = views.NewTransferView(m.uiModel)
+		m.updateCurrentView()
 	}
 
+	// Uruchomienie programu
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v", err)

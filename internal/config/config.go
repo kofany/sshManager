@@ -1,18 +1,20 @@
-// internal/config/config.go
+// internal/config/config.go - zaktualizuj początek pliku
 
 package config
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sshManager/internal/models"
 )
 
 const (
-	defaultConfigFileName = "ssh_hosts.json"
-	defaultFilePerms      = 0600 // tylko właściciel może czytać/pisać
+	DefaultConfigFileName = "ssh_hosts.json" // Zmiana na wielką literę
+	DefaultConfigDir      = ".config/sshmen" // Zmiana na wielką literę
+	DefaultFilePerms      = 0600
 )
 
 type Manager struct {
@@ -23,11 +25,13 @@ type Manager struct {
 // NewManager tworzy nowego menedżera konfiguracji
 func NewManager(configPath string) *Manager {
 	if configPath == "" {
-		homeDir, err := os.UserHomeDir()
+		// Użyj GetDefaultConfigPath() do uzyskania ścieżki
+		defaultPath, err := GetDefaultConfigPath()
 		if err == nil {
-			configPath = filepath.Join(homeDir, defaultConfigFileName)
+			configPath = defaultPath
 		} else {
-			configPath = defaultConfigFileName
+			// Fallback do bieżącego katalogu jeśli nie można uzyskać ścieżki domowej
+			configPath = DefaultConfigFileName
 		}
 	}
 
@@ -39,6 +43,12 @@ func NewManager(configPath string) *Manager {
 
 // Load wczytuje konfigurację z pliku
 func (m *Manager) Load() error {
+	// Upewnij się, że katalog konfiguracyjny istnieje
+	configDir := filepath.Dir(m.configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
+	}
+
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -49,20 +59,34 @@ func (m *Manager) Load() error {
 			}
 			return m.Save() // Zapisujemy pustą konfigurację
 		}
-		return err
+		return fmt.Errorf("failed to read config file: %v", err)
 	}
 
-	return json.Unmarshal(data, m.config)
+	if err := json.Unmarshal(data, m.config); err != nil {
+		return fmt.Errorf("failed to parse config file: %v", err)
+	}
+
+	return nil
 }
 
 // Save zapisuje konfigurację do pliku
 func (m *Manager) Save() error {
-	data, err := json.MarshalIndent(m.config, "", "    ")
-	if err != nil {
-		return err
+	// Upewnij się, że katalog konfiguracyjny istnieje
+	configDir := filepath.Dir(m.configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
 	}
 
-	return os.WriteFile(m.configPath, data, defaultFilePerms)
+	data, err := json.MarshalIndent(m.config, "", "    ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+
+	if err := os.WriteFile(m.configPath, data, DefaultFilePerms); err != nil {
+		return fmt.Errorf("failed to write config file: %v", err)
+	}
+
+	return nil
 }
 
 // GetHosts zwraca listę wszystkich hostów
@@ -143,4 +167,19 @@ func (m *Manager) FindHostByName(name string) (models.Host, int, error) {
 		}
 	}
 	return models.Host{}, -1, errors.New("host not found")
+}
+
+func GetDefaultConfigPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not get home directory: %v", err)
+	}
+
+	// Utwórz katalog konfiguracyjny jeśli nie istnieje
+	configDir := filepath.Join(homeDir, DefaultConfigDir)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return "", fmt.Errorf("could not create config directory: %v", err)
+	}
+
+	return filepath.Join(configDir, DefaultConfigFileName), nil
 }

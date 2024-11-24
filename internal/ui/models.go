@@ -23,9 +23,9 @@ type KeyMap struct {
 	Back     key.Binding
 	Quit     key.Binding
 	Edit     key.Binding
-	Delete   key.Binding
-	Transfer key.Binding
 	Connect  key.Binding
+	Transfer key.Binding
+	Refresh  key.Binding
 }
 
 // DefaultKeyMap zwraca domyślne ustawienia klawiszy
@@ -33,39 +33,39 @@ func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "góra"),
+			key.WithHelp("↑/k", "up"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "dół"),
+			key.WithHelp("↓/j", "down"),
 		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "wybierz"),
+			key.WithHelp("enter", "select"),
 		),
 		Back: key.NewBinding(
 			key.WithKeys("esc"),
-			key.WithHelp("esc", "wróć"),
+			key.WithHelp("esc", "back"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "wyjdź"),
+			key.WithHelp("q", "quit"),
 		),
 		Edit: key.NewBinding(
 			key.WithKeys("e"),
-			key.WithHelp("e", "edytuj"),
+			key.WithHelp("e", "edit"),
 		),
-		Delete: key.NewBinding(
-			key.WithKeys("d"),
-			key.WithHelp("d", "usuń"),
+		Connect: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "connect"),
 		),
 		Transfer: key.NewBinding(
 			key.WithKeys("t"),
 			key.WithHelp("t", "transfer"),
 		),
-		Connect: key.NewBinding(
-			key.WithKeys("c"),
-			key.WithHelp("c", "połącz"),
+		Refresh: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "refresh"),
 		),
 	}
 }
@@ -94,7 +94,7 @@ type Model struct {
 	keys         KeyMap
 	status       Status
 	activeView   View
-	connection   *ssh.Connection
+	sshClient    *ssh.SSHClient // Zmiana z Connection na SSHClient
 	transfer     *ssh.FileTransfer
 	hosts        []models.Host
 	passwords    []models.Password
@@ -203,8 +203,15 @@ func (m Model) viewMain() string {
 }
 
 // NewModel tworzy nowy model aplikacji
+// internal/ui/models.go - w funkcji NewModel() zaktualizuj inicjalizację configManager
+
 func NewModel() Model {
-	configManager := config.NewManager("") // pusty string użyje domyślnej ścieżki
+	configPath, err := config.GetDefaultConfigPath()
+	if err != nil {
+		configPath = config.DefaultConfigFileName
+	}
+
+	configManager := config.NewManager(configPath)
 
 	m := Model{
 		keys:         DefaultKeyMap(),
@@ -217,7 +224,7 @@ func NewModel() Model {
 
 	// Wczytaj zapisaną konfigurację
 	if err := configManager.Load(); err != nil {
-		// Można dodać obsługę błędu
+		m.SetStatus(fmt.Sprintf("Warning: %v", err), true)
 	}
 
 	// Załaduj dane do modelu
@@ -228,8 +235,6 @@ func NewModel() Model {
 	return m
 }
 
-// SaveConfig zapisuje konfigurację
-// SaveConfig zapisuje konfigurację
 func (m *Model) SaveConfig() interface{} {
 	if err := m.config.Save(); err != nil {
 		return fmt.Errorf("nie udało się zapisać konfiguracji: %v", err)
@@ -301,40 +306,43 @@ func (m *Model) ClearStatus() {
 	m.status = Status{}
 }
 
-// ConnectToHost nawiązuje połączenie z wybranym hostem
+// ConnectToHost establishes connection with selected host
 func (m *Model) ConnectToHost(host *models.Host, password string) interface{} {
-	// Zamknij poprzednie połączenie jeśli istnieje
-	if m.connection != nil {
-		m.connection.Close()
+	// Jeśli istnieje poprzednie połączenie, zamknij je
+	if m.sshClient != nil {
+		m.DisconnectHost()
 	}
 
-	config := &ssh.ConnectionConfig{
-		Host:     host,
-		Password: password,
-	}
+	// Utwórz nowego klienta SSH
+	m.sshClient = ssh.NewSSHClient(m.passwords)
 
-	conn, err := ssh.NewConnection(config)
+	// Nawiąż połączenie
+	err := m.sshClient.Connect(host, password)
 	if err != nil {
-		return fmt.Errorf("nie udało się nawiązać połączenia: %v", err)
+		return fmt.Errorf("failed to connect: %v", err)
 	}
 
-	m.connection = conn
 	m.selectedHost = host
-	m.transfer = ssh.NewFileTransfer(conn)
+
+	// Utwórz nowy obiekt transferu plików
+	m.transfer = ssh.NewFileTransfer(m.sshClient, m.cipher)
+
 	return nil
 }
 
-// DisconnectHost zamyka połączenie
 func (m *Model) DisconnectHost() interface{} {
-	if m.connection != nil {
-		err := m.connection.Close()
-		m.connection = nil
-		m.transfer = nil
-		m.selectedHost = nil
-		if err != nil {
-			return fmt.Errorf("błąd podczas zamykania połączenia: %v", err)
+	if m.transfer != nil {
+		if err := m.transfer.Disconnect(); // Używamy Disconnect zamiast Close
+		err != nil {
+			return fmt.Errorf("error disconnecting transfer: %v", err)
 		}
+		m.transfer = nil
 	}
+	if m.sshClient != nil {
+		m.sshClient.Disconnect()
+		m.sshClient = nil
+	}
+	m.selectedHost = nil
 	return nil
 }
 
@@ -350,21 +358,37 @@ func (m *Model) SetSelectedHost(host *models.Host) {
 
 // IsConnected sprawdza czy jest aktywne połączenie
 func (m *Model) IsConnected() bool {
-	return m.connection != nil && m.connection.IsConnected()
+	return m.sshClient != nil && m.sshClient.IsConnected()
 }
 
 // GetConnection zwraca aktywne połączenie
-func (m *Model) GetConnection() *ssh.Connection {
-	return m.connection
+func (m *Model) GetSSHClient() *ssh.SSHClient {
+	return m.sshClient
 }
 
 // GetTransfer zwraca obiekt do transferu plików
 func (m *Model) GetTransfer() *ssh.FileTransfer {
+	if m.transfer == nil && m.IsConnected() {
+		m.transfer = ssh.NewFileTransfer(m.sshClient, m.cipher)
+	}
 	return m.transfer
 }
 
+// SetActiveView switch view and initialize if needed
 func (m *Model) SetActiveView(view View) {
 	m.activeView = view
+	// Resetujemy komunikaty o błędach
+	m.status = Status{}
+
+	// Inicjalizujemy odpowiedni widok
+	switch view {
+	case ViewConnect:
+		if m.sshClient != nil { // Zmiana z connection na sshClient
+			m.DisconnectHost() // Używamy istniejącej metody do rozłączenia
+		}
+	case ViewMain:
+		m.UpdateLists() // Odświeżamy listy przy powrocie do głównego widoku
+	}
 }
 
 // Dodaj te metody w internal/ui/models.go
@@ -457,4 +481,68 @@ func (m *Model) SetCipher(cipher *crypto.Cipher) {
 
 func (m *Model) GetCipher() *crypto.Cipher {
 	return m.cipher
+}
+
+// DeleteHost usuwa hosta
+func (m *Model) DeleteHost(name string) interface{} {
+	// Najpierw znajdź hosta w konfiguracji
+	for i, h := range m.config.GetHosts() {
+		if h.Name == name {
+			// Usuń z konfiguracji
+			if err := m.config.DeleteHost(i); err != nil {
+				return fmt.Errorf("nie można usunąć hosta: %v", err)
+			}
+			// Usuń z lokalnej listy
+			for j, host := range m.hosts {
+				if host.Name == name {
+					m.hosts = append(m.hosts[:j], m.hosts[j+1:]...)
+					break
+				}
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("nie znaleziono hosta %s", name)
+}
+
+// DeletePassword usuwa hasło
+func (m *Model) DeletePassword(description string) interface{} {
+	// Najpierw znajdź indeks hasła
+	var passwordIndex int = -1
+	for i, p := range m.config.GetPasswords() {
+		if p.Description == description {
+			passwordIndex = i
+			break
+		}
+	}
+
+	if passwordIndex == -1 {
+		return fmt.Errorf("nie znaleziono hasła %s", description)
+	}
+
+	// Sprawdź czy hasło nie jest używane przez żadnego hosta
+	for _, h := range m.config.GetHosts() {
+		if h.PasswordID == passwordIndex {
+			return fmt.Errorf("hasło jest używane przez hosta %s", h.Name)
+		}
+	}
+
+	// Usuń hasło z konfiguracji
+	if err := m.config.DeletePassword(passwordIndex); err != nil {
+		return fmt.Errorf("nie można usunąć hasła: %v", err)
+	}
+
+	// Usuń z lokalnej listy
+	for i, p := range m.passwords {
+		if p.Description == description {
+			m.passwords = append(m.passwords[:i], m.passwords[i+1:]...)
+			break
+		}
+	}
+
+	return nil
+}
+
+func (m *Model) GetActiveView() View {
+	return m.activeView
 }
