@@ -1,5 +1,3 @@
-// internal/ui/views/transfer.go - Part 1
-
 package views
 
 import (
@@ -881,8 +879,8 @@ func (v *transferView) renderShortcuts() string {
 		keyStyle := ui.ButtonStyle
 		descStyle := ui.DescriptionStyle
 		if sc.disabled {
-			keyStyle = keyStyle.Copy().Foreground(ui.Subtle)
-			descStyle = descStyle.Copy().Foreground(ui.Subtle)
+			keyStyle = keyStyle.Foreground(ui.Subtle)
+			descStyle = descStyle.Foreground(ui.Subtle)
 		}
 
 		result.WriteString(keyStyle.Render(sc.key))
