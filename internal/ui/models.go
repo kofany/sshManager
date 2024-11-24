@@ -94,7 +94,7 @@ type Model struct {
 	keys         KeyMap
 	status       Status
 	activeView   View
-	sshClient    *ssh.SSHClient // Zmiana z Connection na SSHClient
+	sshClient    *ssh.SSHClient // tylko dla trybu SSH
 	transfer     *ssh.FileTransfer
 	hosts        []models.Host
 	passwords    []models.Password
@@ -306,7 +306,6 @@ func (m *Model) ClearStatus() {
 	m.status = Status{}
 }
 
-// ConnectToHost establishes connection with selected host
 func (m *Model) ConnectToHost(host *models.Host, password string) interface{} {
 	// Jeśli istnieje poprzednie połączenie, zamknij je
 	if m.sshClient != nil {
@@ -324,8 +323,8 @@ func (m *Model) ConnectToHost(host *models.Host, password string) interface{} {
 
 	m.selectedHost = host
 
-	// Utwórz nowy obiekt transferu plików
-	m.transfer = ssh.NewFileTransfer(m.sshClient, m.cipher)
+	// Utwórz nowy obiekt transferu plików (poprawione wywołanie)
+	m.transfer = ssh.NewFileTransfer(m.cipher)
 
 	return nil
 }
@@ -363,13 +362,15 @@ func (m *Model) IsConnected() bool {
 
 // GetConnection zwraca aktywne połączenie
 func (m *Model) GetSSHClient() *ssh.SSHClient {
+	if m.sshClient == nil {
+		m.sshClient = ssh.NewSSHClient(m.passwords)
+	}
 	return m.sshClient
 }
 
-// GetTransfer zwraca obiekt do transferu plików
 func (m *Model) GetTransfer() *ssh.FileTransfer {
-	if m.transfer == nil && m.IsConnected() {
-		m.transfer = ssh.NewFileTransfer(m.sshClient, m.cipher)
+	if m.transfer == nil {
+		m.transfer = ssh.NewFileTransfer(m.cipher)
 	}
 	return m.transfer
 }
@@ -545,4 +546,8 @@ func (m *Model) DeletePassword(description string) interface{} {
 
 func (m *Model) GetActiveView() View {
 	return m.activeView
+}
+
+func (m *Model) SetTransfer(transfer *ssh.FileTransfer) {
+	m.transfer = transfer
 }

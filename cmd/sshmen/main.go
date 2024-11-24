@@ -32,7 +32,6 @@ type programModel struct {
 }
 
 func initialModel() *programModel {
-	// Używamy & aby uzyskać wskaźnik do modelu UI
 	uiModel := &ui.Model{}
 	*uiModel = ui.NewModel()
 	mainView := views.NewMainView(uiModel)
@@ -48,13 +47,10 @@ func (m *programModel) Init() tea.Cmd {
 	return m.currentView.Init()
 }
 
-// Dodajmy nową metodę do aktualizacji widoku
 func (m *programModel) updateCurrentView() {
 	switch m.uiModel.GetActiveView() {
 	case ui.ViewMain:
 		m.currentView = views.NewMainView(m.uiModel)
-	case ui.ViewConnect:
-		m.currentView = views.NewConnectView(m.uiModel)
 	case ui.ViewEdit:
 		m.currentView = views.NewEditView(m.uiModel)
 	case ui.ViewTransfer:
@@ -104,7 +100,7 @@ func main() {
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
 		fmt.Printf("Warning: Could not determine config path: %v\n", err)
-		configPath = config.DefaultConfigFileName // Teraz będzie działać
+		configPath = config.DefaultConfigFileName
 	}
 	fmt.Printf("Using config file: %s\n", configPath)
 

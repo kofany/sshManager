@@ -10,16 +10,18 @@ import (
 	"time"
 
 	"sshManager/internal/crypto"
+	"sshManager/internal/models"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
 type FileTransfer struct {
-	client     *SSHClient
-	sftpClient *sftp.Client
-	connected  bool
-	cipher     *crypto.Cipher // Dodajemy pole cipher
+	sftpClient  *sftp.Client
+	sshClient   *ssh.Client // To jest natywny klient golang.org/x/crypto/ssh
+	currentHost *models.Host
+	cipher      *crypto.Cipher
+	connected   bool
 }
 
 // TransferProgress reprezentuje postęp transferu pliku
@@ -31,33 +33,20 @@ type TransferProgress struct {
 }
 
 // NewFileTransfer tworzy nową instancję FileTransfer
-func NewFileTransfer(client *SSHClient, cipher *crypto.Cipher) *FileTransfer {
+func NewFileTransfer(cipher *crypto.Cipher) *FileTransfer {
 	return &FileTransfer{
-		client:     client,
-		sftpClient: nil,
-		connected:  false,
-		cipher:     cipher,
+		cipher:    cipher,
+		connected: false,
 	}
 }
 
 // Connect nawiązuje połączenie SFTP
-func (ft *FileTransfer) Connect() error {
+func (ft *FileTransfer) Connect(host *models.Host, password string) error {
 	if ft.connected {
 		return nil
 	}
 
-	host := ft.client.GetCurrentHost()
-	if host == nil {
-		return fmt.Errorf("no host selected")
-	}
-
-	password, err := ft.getPassword()
-	if err != nil {
-		return fmt.Errorf("failed to get password: %v", err)
-	}
-
-	// Konfiguracja połączenia SSH dla SFTP
-	sshConfig := &ssh.ClientConfig{
+	config := &ssh.ClientConfig{
 		User: host.Login,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
@@ -65,22 +54,23 @@ func (ft *FileTransfer) Connect() error {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	// Nawiązanie połączenia SSH
 	addr := fmt.Sprintf("%s:%s", host.IP, host.Port)
-	sshClient, err := ssh.Dial("tcp", addr, sshConfig)
+	sshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		return fmt.Errorf("failed to dial: %v", err)
 	}
 
-	// Utworzenie klienta SFTP
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		sshClient.Close()
 		return fmt.Errorf("failed to create SFTP client: %v", err)
 	}
 
+	ft.sshClient = sshClient
 	ft.sftpClient = sftpClient
+	ft.currentHost = host
 	ft.connected = true
+
 	return nil
 }
 
@@ -91,6 +81,12 @@ func (ft *FileTransfer) Disconnect() error {
 			return fmt.Errorf("error closing SFTP client: %v", err)
 		}
 		ft.sftpClient = nil
+	}
+	if ft.sshClient != nil {
+		if err := ft.sshClient.Close(); err != nil {
+			return fmt.Errorf("error closing SSH client: %v", err)
+		}
+		ft.sshClient = nil
 	}
 	ft.connected = false
 	return nil
@@ -114,118 +110,6 @@ func (ft *FileTransfer) ListRemoteFiles(path string) ([]os.FileInfo, error) {
 	}
 
 	return ft.sftpClient.ReadDir(path)
-}
-
-// UploadFile wysyła plik na serwer
-func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
-	if !ft.connected {
-		return fmt.Errorf("not connected")
-	}
-
-	// Otwórz lokalny plik
-	srcFile, err := os.Open(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to open local file: %v", err)
-	}
-	defer srcFile.Close()
-
-	// Utwórz zdalny plik
-	dstFile, err := ft.sftpClient.Create(remotePath)
-	if err != nil {
-		return fmt.Errorf("failed to create remote file: %v", err)
-	}
-	defer dstFile.Close()
-
-	// Przygotuj informacje o transferze
-	fileInfo, err := srcFile.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %v", err)
-	}
-
-	progress := &TransferProgress{
-		FileName:   filepath.Base(localPath),
-		TotalBytes: fileInfo.Size(),
-		StartTime:  time.Now(),
-	}
-
-	// Kopiuj z monitorowaniem postępu
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := srcFile.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("error reading local file: %v", err)
-		}
-
-		if _, err := dstFile.Write(buf[:n]); err != nil {
-			return fmt.Errorf("error writing remote file: %v", err)
-		}
-
-		progress.TransferredBytes += int64(n)
-		if progressChan != nil {
-			progressChan <- *progress
-		}
-	}
-
-	return nil
-}
-
-// DownloadFile pobiera plik z serwera
-func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan chan<- TransferProgress) error {
-	if !ft.connected {
-		return fmt.Errorf("not connected")
-	}
-
-	// Otwórz zdalny plik
-	srcFile, err := ft.sftpClient.Open(remotePath)
-	if err != nil {
-		return fmt.Errorf("failed to open remote file: %v", err)
-	}
-	defer srcFile.Close()
-
-	// Utwórz lokalny plik
-	dstFile, err := os.Create(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to create local file: %v", err)
-	}
-	defer dstFile.Close()
-
-	// Przygotuj informacje o transferze
-	fileInfo, err := srcFile.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %v", err)
-	}
-
-	progress := &TransferProgress{
-		FileName:   filepath.Base(remotePath),
-		TotalBytes: fileInfo.Size(),
-		StartTime:  time.Now(),
-	}
-
-	// Kopiuj z monitorowaniem postępu
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := srcFile.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("error reading remote file: %v", err)
-		}
-
-		if _, err := dstFile.Write(buf[:n]); err != nil {
-			return fmt.Errorf("error writing local file: %v", err)
-		}
-
-		progress.TransferredBytes += int64(n)
-		if progressChan != nil {
-			progressChan <- *progress
-		}
-	}
-
-	return nil
 }
 
 // GetRemoteFileInfo zwraca informacje o zdalnym pliku
@@ -264,16 +148,142 @@ func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
 	return ft.sftpClient.Rename(oldPath, newPath)
 }
 
-func (ft *FileTransfer) getPassword() (string, error) {
-	host := ft.client.GetCurrentHost()
-	if host == nil {
-		return "", fmt.Errorf("no host selected")
+func (ft *FileTransfer) IsConnected() bool {
+	return ft.connected && ft.sftpClient != nil
+}
+
+func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
+	if !ft.connected {
+		return fmt.Errorf("not connected")
 	}
 
-	passwords := ft.client.GetPasswords()
-	if host.PasswordID >= len(passwords) {
-		return "", fmt.Errorf("invalid password ID")
+	srcFile, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open local file: %v", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := ft.sftpClient.Create(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to create remote file: %v", err)
+	}
+	defer dstFile.Close()
+
+	fileInfo, err := srcFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %v", err)
 	}
 
-	return passwords[host.PasswordID].GetDecrypted(ft.cipher)
+	progress := TransferProgress{
+		FileName:   filepath.Base(localPath),
+		TotalBytes: fileInfo.Size(),
+		StartTime:  time.Now(),
+	}
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := srcFile.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error reading local file: %v", err)
+		}
+
+		if _, err := dstFile.Write(buf[:n]); err != nil {
+			return fmt.Errorf("error writing remote file: %v", err)
+		}
+
+		progress.TransferredBytes += int64(n)
+		select {
+		case progressChan <- progress:
+		default:
+		}
+
+		// Dodaj małe opóźnienie aby nie przeciążać UI
+		time.Sleep(time.Millisecond * 50)
+	}
+
+	return nil
+}
+
+func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan chan<- TransferProgress) error {
+	if !ft.connected {
+		return fmt.Errorf("not connected")
+	}
+
+	// Otwórz zdalny plik
+	srcFile, err := ft.sftpClient.Open(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to open remote file: %v", err)
+	}
+	defer srcFile.Close()
+
+	// Utwórz lokalny plik
+	dstFile, err := os.Create(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to create local file: %v", err)
+	}
+	defer dstFile.Close()
+
+	// Przygotuj informacje o transferze
+	fileInfo, err := srcFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %v", err)
+	}
+
+	// Inicjalizacja postępu
+	progress := TransferProgress{
+		FileName:   filepath.Base(remotePath),
+		TotalBytes: fileInfo.Size(),
+		StartTime:  time.Now(),
+	}
+
+	// Utwórz bufor do kopiowania
+	buf := make([]byte, 32*1024)
+	lastUpdate := time.Now()
+	updateInterval := time.Millisecond * 100 // Aktualizuj co 100ms
+
+	// Kopiuj z monitorowaniem postępu
+	for {
+		n, err := srcFile.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error reading remote file: %v", err)
+		}
+
+		// Zapisz dane
+		if _, err := dstFile.Write(buf[:n]); err != nil {
+			return fmt.Errorf("error writing local file: %v", err)
+		}
+
+		// Aktualizuj postęp
+		progress.TransferredBytes += int64(n)
+
+		// Wysyłaj aktualizacje postępu tylko co określony interwał
+		if time.Since(lastUpdate) >= updateInterval {
+			if progressChan != nil {
+				select {
+				case progressChan <- progress:
+					lastUpdate = time.Now()
+				default:
+					// Jeśli kanał jest zablokowany, pomijamy aktualizację
+				}
+			}
+			// Dodaj małe opóźnienie aby nie przeciążać UI
+			time.Sleep(time.Millisecond * 50)
+		}
+	}
+
+	// Wyślij końcową aktualizację
+	if progressChan != nil {
+		select {
+		case progressChan <- progress:
+		default:
+		}
+	}
+
+	return nil
 }

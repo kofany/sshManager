@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"sshManager/internal/ssh"
@@ -15,6 +17,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Dodaj na początku pliku po importach
+func getHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return home
+}
 
 // Stałe określające tryby i stany
 const (
@@ -53,11 +64,11 @@ type transferView struct {
 	connected     bool
 	transferring  bool
 	progress      ssh.TransferProgress
-	showHelp      bool // Dodajemy brakujące pole
+	showHelp      bool
 	input         textinput.Model
+	mutex         sync.Mutex // Dodajemy mutex do bezpiecznej aktualizacji stanu
 }
 
-// NewTransferView tworzy nowy widok transferu
 func NewTransferView(model *ui.Model) *transferView {
 	input := textinput.New()
 	input.Placeholder = "Enter command..."
@@ -66,43 +77,60 @@ func NewTransferView(model *ui.Model) *transferView {
 	v := &transferView{
 		model: model,
 		localPanel: Panel{
-			path:   ".",
+			path:   getHomeDir(), // Zaczynamy od katalogu domowego
 			active: true,
+			entries: []FileEntry{
+				{name: "..", isDir: true}, // Dodajemy ".." do nawigacji w górę
+			},
 		},
 		remotePanel: Panel{
 			path:   "/",
 			active: false,
+			entries: []FileEntry{
+				{name: "..", isDir: true},
+			},
 		},
 		input: input,
 	}
 
-	// Inicjalizacja początkowa
-	if err := v.initializeView(); err != nil {
-		v.errorMessage = fmt.Sprintf("Initialization error: %v", err)
+	// Inicjalizujemy panel lokalny
+	if err := v.updateLocalPanel(); err != nil {
+		v.errorMessage = fmt.Sprintf("Failed to load local directory: %v", err)
+		return v
+	}
+
+	// Inicjujemy połączenie SFTP w tle
+	if v.model.GetSelectedHost() != nil {
+		go func() {
+			v.mutex.Lock()
+			v.connecting = true
+			v.mutex.Unlock()
+
+			if err := v.ensureConnected(); err != nil {
+				v.mutex.Lock()
+				v.errorMessage = fmt.Sprintf("Connection error: %v", err)
+				v.connecting = false
+				v.mutex.Unlock()
+				return
+			}
+
+			// Po połączeniu aktualizujemy panel zdalny
+			if err := v.updateRemotePanel(); err != nil {
+				v.mutex.Lock()
+				v.errorMessage = fmt.Sprintf("Failed to load remote directory: %v", err)
+				v.connecting = false
+				v.mutex.Unlock()
+				return
+			}
+
+			v.mutex.Lock()
+			v.connected = true
+			v.connecting = false
+			v.mutex.Unlock()
+		}()
 	}
 
 	return v
-}
-
-// initializeView inicjalizuje widok
-func (v *transferView) initializeView() error {
-	// Wczytaj zawartość lokalnego katalogu
-	if err := v.updateLocalPanel(); err != nil {
-		return fmt.Errorf("failed to load local directory: %v", err)
-	}
-
-	// Jeśli jest połączenie, wczytaj zdalny katalog
-	if v.model.IsConnected() {
-		v.connecting = true
-		if err := v.connectSFTP(); err != nil {
-			return fmt.Errorf("failed to connect SFTP: %v", err)
-		}
-		if err := v.updateRemotePanel(); err != nil {
-			return fmt.Errorf("failed to load remote directory: %v", err)
-		}
-	}
-
-	return nil
 }
 
 // updateLocalPanel odświeża zawartość lokalnego panelu
@@ -115,7 +143,6 @@ func (v *transferView) updateLocalPanel() error {
 	return nil
 }
 
-// readLocalDirectory czyta zawartość lokalnego katalogu
 func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 	dir, err := os.Open(path)
 	if err != nil {
@@ -128,18 +155,29 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 		return nil, err
 	}
 
-	var entries []FileEntry
+	// Zawsze zaczynamy od ".." do nawigacji w górę
+	entries := []FileEntry{{
+		name:    "..",
+		isDir:   true,
+		modTime: time.Now(),
+	}}
+
 	for _, fi := range fileInfos {
-		entries = append(entries, FileEntry{
-			name:    fi.Name(),
-			size:    fi.Size(),
-			modTime: fi.ModTime(),
-			isDir:   fi.IsDir(),
-		})
+		// Pomijamy ukryte pliki zaczynające się od "." (opcjonalnie)
+		if !strings.HasPrefix(fi.Name(), ".") || fi.Name() == ".." {
+			entries = append(entries, FileEntry{
+				name:    fi.Name(),
+				size:    fi.Size(),
+				modTime: fi.ModTime(),
+				isDir:   fi.IsDir(),
+			})
+		}
 	}
 
 	// Sortowanie: najpierw katalogi, potem pliki, alfabetycznie
-	sort.Slice(entries, func(i, j int) bool {
+	sort.Slice(entries[1:], func(i, j int) bool {
+		// Przesuwamy indeksy o 1, bo pomijamy ".."
+		i, j = i+1, j+1
 		if entries[i].isDir != entries[j].isDir {
 			return entries[i].isDir
 		}
@@ -149,33 +187,18 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 	return entries, nil
 }
 
-// connectSFTP nawiązuje połączenie SFTP
-func (v *transferView) connectSFTP() error {
-	transfer := v.model.GetTransfer()
-	if transfer == nil {
-		return fmt.Errorf("no transfer client available")
-	}
-
-	if err := transfer.Connect(); err != nil {
-		return fmt.Errorf("failed to connect SFTP: %v", err)
-	}
-
-	v.connected = true
-	v.connecting = false
-	return nil
-}
-
 func (v *transferView) Init() tea.Cmd {
 	return nil
 }
 
 func (v *transferView) updateRemotePanel() error {
-	if !v.connected {
-		return fmt.Errorf("not connected to remote host")
+	if err := v.ensureConnected(); err != nil {
+		return err
 	}
 
 	entries, err := v.readRemoteDirectory(v.remotePanel.path)
 	if err != nil {
+		v.setConnected(false) // Oznacz jako rozłączony w przypadku błędu
 		return err
 	}
 	v.remotePanel.entries = entries
@@ -184,28 +207,38 @@ func (v *transferView) updateRemotePanel() error {
 
 // readRemoteDirectory czyta zawartość zdalnego katalogu
 func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
-	transfer := v.model.GetTransfer()
-	if transfer == nil {
-		return nil, fmt.Errorf("no transfer client available")
+	if err := v.ensureConnected(); err != nil {
+		return nil, err
 	}
 
+	transfer := v.model.GetTransfer()
 	fileInfos, err := transfer.ListRemoteFiles(path)
 	if err != nil {
+		v.setConnected(false)
 		return nil, fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
-	var entries []FileEntry
+	// Zawsze zaczynamy od ".." do nawigacji w górę
+	entries := []FileEntry{{
+		name:    "..",
+		isDir:   true,
+		modTime: time.Now(),
+	}}
+
 	for _, fi := range fileInfos {
-		entries = append(entries, FileEntry{
-			name:    fi.Name(),
-			size:    fi.Size(),
-			modTime: fi.ModTime(),
-			isDir:   fi.IsDir(),
-		})
+		if !strings.HasPrefix(fi.Name(), ".") || fi.Name() == ".." {
+			entries = append(entries, FileEntry{
+				name:    fi.Name(),
+				size:    fi.Size(),
+				modTime: fi.ModTime(),
+				isDir:   fi.IsDir(),
+			})
+		}
 	}
 
 	// Sortowanie: najpierw katalogi, potem pliki, alfabetycznie
-	sort.Slice(entries, func(i, j int) bool {
+	sort.Slice(entries[1:], func(i, j int) bool {
+		i, j = i+1, j+1
 		if entries[i].isDir != entries[j].isDir {
 			return entries[i].isDir
 		}
@@ -244,7 +277,7 @@ func (v *transferView) renderPanel(p *Panel) string {
 	var panelContent strings.Builder
 
 	// Formatowanie i skracanie ścieżki
-	pathText := formatPath(p.path, 40) // Użycie formatPath
+	pathText := formatPath(p.path, 40)
 
 	// Użycie stylów ścieżki
 	pathStyle := inactivePathStyle
@@ -260,21 +293,27 @@ func (v *transferView) renderPanel(p *Panel) string {
 	))
 	panelContent.WriteString("\n")
 
-	// Lista plików
-	filesList := renderFileList(
-		p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
-		p.selectedIndex-p.scrollOffset,
-		p.active,
-		60, // szerokość listy plików
-	)
-	panelContent.WriteString(filesList)
+	// Sprawdź czy entries nie jest nil i czy ma elementy
+	if len(p.entries) > 0 {
+		// Lista plików
+		filesList := renderFileList(
+			p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
+			p.selectedIndex-p.scrollOffset,
+			p.active,
+			60, // szerokość listy plików
+		)
+		panelContent.WriteString(filesList)
 
-	// Informacja o przewijaniu
-	if len(p.entries) > maxVisibleItems {
-		panelContent.WriteString(fmt.Sprintf(" Showing %d-%d of %d items",
-			p.scrollOffset+1,
-			min(p.scrollOffset+maxVisibleItems, len(p.entries)),
-			len(p.entries)))
+		// Informacja o przewijaniu
+		if len(p.entries) > maxVisibleItems {
+			panelContent.WriteString(fmt.Sprintf(" Showing %d-%d of %d items",
+				p.scrollOffset+1,
+				min(p.scrollOffset+maxVisibleItems, len(p.entries)),
+				len(p.entries)))
+		}
+	} else {
+		// Dodaj informację gdy katalog jest pusty
+		panelContent.WriteString("\n Directory is empty")
 	}
 
 	// Zastosuj styl całego panelu
@@ -310,6 +349,12 @@ func formatSize(size int64) string {
 
 // navigatePanel obsługuje nawigację w panelu
 func (v *transferView) navigatePanel(p *Panel, direction int) {
+	if len(p.entries) == 0 {
+		p.selectedIndex = 0
+		p.scrollOffset = 0
+		return
+	}
+
 	newIndex := p.selectedIndex + direction
 
 	if newIndex < 0 {
@@ -326,6 +371,11 @@ func (v *transferView) navigatePanel(p *Panel, direction int) {
 	} else if p.selectedIndex >= p.scrollOffset+maxVisibleItems {
 		p.scrollOffset = p.selectedIndex - maxVisibleItems + 1
 	}
+
+	// Upewnij się, że scrollOffset nie jest ujemny
+	if p.scrollOffset < 0 {
+		p.scrollOffset = 0
+	}
 }
 
 // enterDirectory wchodzi do wybranego katalogu
@@ -339,9 +389,14 @@ func (v *transferView) enterDirectory(p *Panel) error {
 		return nil
 	}
 
-	newPath := ""
+	var newPath string
 	if entry.name == ".." {
+		// Nawigacja do góry
 		newPath = filepath.Dir(p.path)
+		// Dla Windows możemy potrzebować dodatkowej obsługi ścieżki głównej
+		if runtime.GOOS == "windows" && filepath.Dir(newPath) == newPath {
+			newPath = filepath.VolumeName(newPath) + "\\"
+		}
 	} else {
 		newPath = filepath.Join(p.path, entry.name)
 	}
@@ -387,38 +442,58 @@ func (v *transferView) copyFile() error {
 	srcPath := filepath.Join(srcPanel.path, entry.name)
 	dstPath := filepath.Join(dstPanel.path, entry.name)
 
+	v.mutex.Lock()
 	v.transferring = true
 	v.statusMessage = fmt.Sprintf("Copying %s...", entry.name)
+	v.mutex.Unlock()
 
-	// Utwórz kanał dla postępu
-	progressChan := make(chan ssh.TransferProgress)
+	// Utwórz kanały
+	progressChan := make(chan ssh.TransferProgress, 100) // Buforowany kanał
+	doneChan := make(chan error, 1)
+	updateChan := make(chan tea.Msg)
 
-	// Uruchom transfer w goroutinie
+	// Goroutine do transferu
 	go func() {
 		var err error
 		if srcPanel == &v.localPanel {
-			// Upload
 			err = v.model.GetTransfer().UploadFile(srcPath, dstPath, progressChan)
 		} else {
-			// Download
 			err = v.model.GetTransfer().DownloadFile(srcPath, dstPath, progressChan)
 		}
-
-		if err != nil {
-			v.errorMessage = fmt.Sprintf("Transfer error: %v", err)
-		} else {
-			v.statusMessage = "Transfer completed successfully"
-		}
-
-		v.transferring = false
-		// Odśwież panel docelowy
-		if dstPanel == &v.localPanel {
-			v.updateLocalPanel()
-		} else {
-			v.updateRemotePanel()
-		}
-
+		doneChan <- err
 		close(progressChan)
+	}()
+
+	// Goroutine do aktualizacji UI
+	go func() {
+		for {
+			select {
+			case progress, ok := <-progressChan:
+				if !ok {
+					return
+				}
+				v.mutex.Lock()
+				v.progress = progress
+				v.mutex.Unlock()
+				updateChan <- ssh.TransferProgress(progress)
+			case err := <-doneChan:
+				v.mutex.Lock()
+				v.transferring = false
+				if err != nil {
+					v.errorMessage = fmt.Sprintf("Transfer error: %v", err)
+				} else {
+					v.statusMessage = "Transfer completed successfully"
+					// Odśwież panel docelowy
+					if dstPanel == &v.localPanel {
+						v.updateLocalPanel()
+					} else {
+						v.updateRemotePanel()
+					}
+				}
+				v.mutex.Unlock()
+				return
+			}
+		}
 	}()
 
 	return nil
@@ -783,12 +858,16 @@ func (v *transferView) View() string {
 				fmt.Sprintf(" - Connected to %s (%s)", host.Name, host.IP),
 			))
 		}
+	} else if host := v.model.GetSelectedHost(); host != nil {
+		content.WriteString(ui.ErrorStyle.Render(
+			fmt.Sprintf(" - Not connected to %s (%s)", host.Name, host.IP),
+		))
 	}
 	content.WriteString("\n\n")
 
 	// Obsługa stanu łączenia
 	if v.connecting {
-		content.WriteString(ui.DescriptionStyle.Render("Connecting to SFTP..."))
+		content.WriteString(ui.DescriptionStyle.Render("Establishing SFTP connection..."))
 		return ui.WindowStyle.Render(content.String())
 	}
 
@@ -797,21 +876,41 @@ func (v *transferView) View() string {
 		content.WriteString(ui.DescriptionStyle.Render(helpText))
 		return ui.WindowStyle.Render(content.String())
 	}
+	// Oblicz szerokość paneli
+	totalWidth := 120                  // Zwiększamy całkowitą szerokość
+	panelWidth := (totalWidth - 3) / 2 // 3 to szerokość separatora
 
-	// Oblicz szerokość paneli (połowa dostępnej przestrzeni)
-	totalWidth := 80 // Domyślna szerokość
+	// Renderuj panele w jednej linii
+	leftPanel := v.renderPanel(&v.localPanel)
+	rightPanel := ""
 
-	// Renderuj panele obok siebie
-	panels := strings.Split(
-		v.renderPanel(&v.localPanel)+
-			"   "+ // Separator
-			v.renderPanel(&v.remotePanel),
-		"\n",
-	)
+	if !v.connected {
+		rightPanel = ui.ErrorStyle.Render("\n  No SFTP Connection\n  Press 'q' to return and connect to a host first.")
+	} else {
+		rightPanel = v.renderPanel(&v.remotePanel)
+	}
 
-	// Dodaj każdą linię paneli
-	for _, line := range panels {
-		content.WriteString(line)
+	// Użyj strings.Split aby podzielić panele na linie
+	leftLines := strings.Split(leftPanel, "\n")
+	rightLines := strings.Split(rightPanel, "\n")
+
+	// Wyrównaj liczbę linii w obu panelach
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
+	}
+	for i := len(leftLines); i < maxLines; i++ {
+		leftLines = append(leftLines, strings.Repeat(" ", panelWidth))
+	}
+	for i := len(rightLines); i < maxLines; i++ {
+		rightLines = append(rightLines, strings.Repeat(" ", panelWidth))
+	}
+
+	// Połącz linie paneli ze sobą
+	for i := 0; i < maxLines; i++ {
+		content.WriteString(leftLines[i])
+		content.WriteString("   ") // Separator
+		content.WriteString(rightLines[i])
 		content.WriteString("\n")
 	}
 
@@ -843,8 +942,18 @@ func (v *transferView) View() string {
 		footerContent.WriteString("\n")
 	}
 
-	// Skróty klawiszowe
-	footerContent.WriteString(v.renderShortcuts())
+	// Komunikat o braku połączenia (jeśli nie połączono)
+	if !v.connected && v.errorMessage == "" {
+		footerContent.WriteString(ui.ErrorStyle.Render("SFTP connection not established. Press 'q' to return to main menu and connect first."))
+		footerContent.WriteString("\n")
+	}
+
+	// Skróty klawiszowe (pokazuj tylko aktywne w zależności od stanu połączenia)
+	if v.connected {
+		footerContent.WriteString(v.renderShortcuts())
+	} else {
+		footerContent.WriteString(ui.ButtonStyle.Render("q") + " - Return to main menu")
+	}
 
 	// Dodaj stopkę do głównej zawartości
 	content.WriteString("\n")
@@ -906,7 +1015,8 @@ var (
 	panelStyle = lipgloss.NewStyle().
 			Border(panelBorder).
 			BorderForeground(ui.Subtle).
-			Padding(0, 1)
+			Padding(0, 1).
+			Height(20) // Dodaj stałą wysokość
 
 	activePathStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -931,7 +1041,15 @@ func formatPath(path string, maxWidth int) string {
 func renderFileList(entries []FileEntry, selected int, active bool, width int) string {
 	var content strings.Builder
 
+	// Zabezpieczenie przed pustą listą
+	if len(entries) == 0 {
+		return ""
+	}
+
 	for i, entry := range entries {
+		// Sprawdź czy selected jest w prawidłowym zakresie
+		isSelected := i == selected && selected >= 0 && selected < len(entries)
+
 		// Formatowanie nazwy pliku
 		name := entry.name
 		if entry.isDir {
@@ -953,7 +1071,7 @@ func renderFileList(entries []FileEntry, selected int, active bool, width int) s
 
 		// Styl linii
 		style := lipgloss.NewStyle()
-		if i == selected {
+		if isSelected {
 			if active {
 				style = style.Bold(true).Background(ui.Highlight).Foreground(lipgloss.Color("0"))
 			} else {
@@ -966,4 +1084,43 @@ func renderFileList(entries []FileEntry, selected int, active bool, width int) s
 	}
 
 	return content.String()
+}
+
+func (v *transferView) ensureConnected() error {
+	if !v.connected {
+		transfer := v.model.GetTransfer()
+		if transfer == nil {
+			return fmt.Errorf("no transfer client available")
+		}
+
+		host := v.model.GetSelectedHost()
+		if host == nil {
+			return fmt.Errorf("no host selected")
+		}
+
+		// Pobierz i odszyfruj hasło
+		passwords := v.model.GetPasswords()
+		if host.PasswordID >= len(passwords) {
+			return fmt.Errorf("invalid password ID")
+		}
+		password := passwords[host.PasswordID]
+		decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+		if err != nil {
+			return fmt.Errorf("failed to decrypt password: %v", err)
+		}
+
+		// Nawiąż połączenie SFTP
+		if err := transfer.Connect(host, decryptedPass); err != nil {
+			return fmt.Errorf("failed to establish SFTP connection: %v", err)
+		}
+
+		v.setConnected(true)
+	}
+	return nil
+}
+
+func (v *transferView) setConnected(connected bool) {
+	v.mutex.Lock()
+	defer v.mutex.Unlock()
+	v.connected = connected
 }
