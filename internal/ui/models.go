@@ -368,14 +368,6 @@ func (m *Model) IsConnected() bool {
 	return m.sshClient != nil && m.sshClient.IsConnected()
 }
 
-// GetConnection zwraca aktywne połączenie
-func (m *Model) GetSSHClient() *ssh.SSHClient {
-	if m.sshClient == nil {
-		m.sshClient = ssh.NewSSHClient(m.passwords)
-	}
-	return m.sshClient
-}
-
 func (m *Model) GetTransfer() *ssh.FileTransfer {
 	if m.transfer == nil {
 		m.transfer = ssh.NewFileTransfer(m.cipher)

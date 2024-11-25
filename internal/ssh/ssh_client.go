@@ -24,18 +24,21 @@ func NewSSHClient(passwords []models.Password) *SSHClient {
 	}
 }
 
-func (s *SSHClient) Connect(host *models.Host, password string) error {
-	sshCommand := fmt.Sprintf("sshpass -p '%s' ssh -o stricthostkeychecking=no %s@%s -p %s",
-		password, host.Login, host.IP, host.Port)
-
-	// Debug info (bezpieczne - nie pokazuje hasła)
-	fmt.Printf("\nConnecting to %s@%s...\n", host.Login, host.IP)
-
+func CreateSSHCommand(host *models.Host, password string) *exec.Cmd {
+	sshCommand := fmt.Sprintf(
+		"clear; sshpass -p '%s' ssh -o StrictHostKeyChecking=no %s@%s -p %s; clear",
+		password, host.Login, host.IP, host.Port,
+	)
 	cmd := exec.Command("sh", "-c", sshCommand)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	return cmd
+}
 
+func (s *SSHClient) Connect(host *models.Host, password string) error {
+	fmt.Printf("\nConnecting to %s@%s...\n", host.Login, host.IP)
+	cmd := CreateSSHCommand(host, password)
 	s.currentHost = host
 	return cmd.Run()
 }

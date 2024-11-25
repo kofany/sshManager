@@ -1,21 +1,23 @@
 // internal/ui/views/main.go
-
 package views
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"sshManager/internal/models"
 	"sshManager/internal/ui"
+	"strings"
+
+	"sshManager/internal/ssh"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type mainView struct {
 	model         *ui.Model
 	hosts         []models.Host
 	selectedIndex int
+	currentDir    string
 	showHostList  bool
 	errMsg        string
 	status        string
@@ -23,6 +25,10 @@ type mainView struct {
 }
 
 type connectError string
+
+type connectFinishedMsg struct {
+	err error
+}
 
 func (e connectError) Error() string {
 	return string(e)
@@ -33,6 +39,7 @@ func NewMainView(model *ui.Model) *mainView {
 		model:        model,
 		showHostList: true,
 		hosts:        model.GetHosts(),
+		currentDir:   getHomeDir(),
 	}
 }
 
@@ -40,6 +47,7 @@ func (v *mainView) Init() tea.Cmd {
 	return nil
 }
 
+// internal/ui/views/main.go - Part 2
 func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -49,7 +57,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, tea.Quit
 
 		case "up", "k":
-			if v.showHostList && len(v.hosts) > 0 && !v.connecting {
+			if len(v.hosts) > 0 && !v.connecting {
 				v.selectedIndex--
 				if v.selectedIndex < 0 {
 					v.selectedIndex = len(v.hosts) - 1
@@ -58,86 +66,49 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "down", "j":
-			if v.showHostList && len(v.hosts) > 0 && !v.connecting {
+			if len(v.hosts) > 0 && !v.connecting {
 				v.selectedIndex++
 				if v.selectedIndex >= len(v.hosts) {
 					v.selectedIndex = 0
 				}
 				v.errMsg = ""
 			}
+		case "enter":
+			// Jeśli trwa łączenie lub nie ma hostów, ignorujemy
+			if v.connecting || len(v.hosts) == 0 {
+				return v, nil
+			}
+			// Używamy tej samej logiki co dla klawisza "c"
+			return v.handleConnect()
 
 		case "c":
-			if v.connecting {
+			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
-			if v.showHostList && len(v.hosts) > 0 {
-				host := v.hosts[v.selectedIndex]
-				v.model.SetSelectedHost(&host)
-
-				// Pobierz i zdekoduj hasło
-				passwords := v.model.GetPasswords()
-				if host.PasswordID >= len(passwords) {
-					v.errMsg = "Invalid password ID"
-					return v, nil
-				}
-
-				password := passwords[host.PasswordID]
-				decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-				if err != nil {
-					v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
-					return v, nil
-				}
-
-				v.connecting = true
-				v.status = "Connecting..."
-				return v, tea.Batch(
-					tea.ExecProcess(
-						createSSHCommand(&host, decryptedPass),
-						func(err error) tea.Msg {
-							if err != nil {
-								return connectError(fmt.Sprintf("SSH connection failed: %v", err))
-							}
-							return nil
-						},
-					),
-				)
-			}
+			return v.handleConnect()
 
 		case "t":
-			if v.connecting {
+			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
-			if v.showHostList && len(v.hosts) > 0 {
-				host := v.hosts[v.selectedIndex]
-				v.model.SetSelectedHost(&host)
-
-				// Pobierz i zdekoduj hasło aby przygotować połączenie SFTP
-				passwords := v.model.GetPasswords()
-				if host.PasswordID >= len(passwords) {
-					v.errMsg = "Invalid password ID"
-					return v, nil
-				}
-
-				password := passwords[host.PasswordID]
-				decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-				if err != nil {
-					v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
-					return v, nil
-				}
-
-				// Inicjujemy połączenie SFTP przed przejściem do widoku transferu
-				transfer := v.model.GetTransfer()
-				if err := transfer.Connect(&host, decryptedPass); err != nil {
-					v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
-					return v, nil
-				}
-
-				// Przełącz na widok transferu
-				v.model.SetActiveView(ui.ViewTransfer)
-				return v, nil
-			}
+			return v.handleTransfer()
 
 		case "e":
+			if v.connecting || len(v.hosts) == 0 {
+				return v, nil
+			}
+			host := v.hosts[v.selectedIndex]
+			v.model.SetSelectedHost(&host)
+			v.model.SetActiveView(ui.ViewEdit)
+			return v, nil
+
+		case "d":
+			if v.connecting || len(v.hosts) == 0 {
+				return v, nil
+			}
+			return v.handleDelete()
+
+		case "n":
 			if !v.connecting {
 				v.model.SetActiveView(ui.ViewEdit)
 				return v, nil
@@ -154,6 +125,17 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case connectFinishedMsg:
+		v.connecting = false
+		v.status = ""
+		if msg.err != nil {
+			v.errMsg = fmt.Sprintf("SSH connection failed: %v", msg.err)
+		} else {
+			v.errMsg = ""
+		}
+		// Dodaj komendę clear screen
+		return v, tea.ClearScreen
+
 	case connectError:
 		v.errMsg = msg.Error()
 		v.connecting = false
@@ -164,96 +146,191 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-func (v *mainView) View() string {
-	var content string
+func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
+	host := v.hosts[v.selectedIndex]
+	v.model.SetSelectedHost(&host)
 
-	// Tytuł i status połączenia
-	content = ui.TitleStyle.Render("SSH Manager") + "\n\n"
+	passwords := v.model.GetPasswords()
+	if host.PasswordID >= len(passwords) {
+		v.errMsg = "Invalid password ID"
+		return v, nil
+	}
 
-	if v.model.IsConnected() {
-		if host := v.model.GetSelectedHost(); host != nil {
-			content += ui.SuccessStyle.Render(fmt.Sprintf("Connected to: %s", host.Name))
-			if transfer := v.model.GetTransfer(); transfer != nil {
-				content += ui.SuccessStyle.Render(" (SFTP available)")
-			}
-			content += "\n\n"
-		}
+	password := passwords[host.PasswordID]
+	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+	if err != nil {
+		v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
+		return v, nil
+	}
+
+	v.connecting = true
+	v.status = "Connecting..."
+
+	cmd := ssh.CreateSSHCommand(&host, decryptedPass) // Używamy funkcji z pakietu ssh
+	return v, tea.ExecProcess(
+		cmd,
+		func(err error) tea.Msg {
+			return connectFinishedMsg{err: err}
+		},
+	)
+}
+
+func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {
+	host := v.hosts[v.selectedIndex]
+	if err := v.model.DeleteHost(host.Name); err != nil {
+		v.errMsg = fmt.Sprintf("Failed to delete host: %v", err)
 	} else {
-		content += ui.DescriptionStyle.Render("No active connection") + "\n\n"
-	}
-
-	// Lista hostów
-	if v.showHostList {
-		if len(v.hosts) == 0 {
-			content += ui.DescriptionStyle.Render("No hosts available. Press 'e' to add hosts.") + "\n\n"
-		} else {
-			content += ui.TitleStyle.Render("Available hosts:") + "\n\n"
-			for i, host := range v.hosts {
-				prefix := "  "
-				if i == v.selectedIndex {
-					prefix = "> "
-					content += ui.SelectedItemStyle.Render(
-						fmt.Sprintf("%s%s (%s)\n", prefix, host.Name, host.Description),
-					)
-				} else {
-					content += fmt.Sprintf("%s%s (%s)\n", prefix, host.Name, host.Description)
-				}
-			}
-			content += "\n"
+		if err := v.model.SaveConfig(); err != nil {
+			v.errMsg = fmt.Sprintf("Failed to save configuration: %v", err)
+			return v, nil
 		}
-	}
-
-	// Dostępne akcje
-	content += "Available actions:\n\n"
-
-	if len(v.hosts) > 0 {
-		content += ui.ButtonStyle.Render("c") + " - Connect SSH    "
-		content += ui.ButtonStyle.Render("t") + " - Transfer files"
-		if !v.model.IsConnected() {
-			content += " (requires connection)"
+		v.hosts = v.model.GetHosts()
+		if v.selectedIndex >= len(v.hosts) {
+			v.selectedIndex = len(v.hosts) - 1
 		}
-		content += "\n"
+		v.status = "Host deleted successfully"
+	}
+	return v, nil
+}
+
+func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
+	host := v.hosts[v.selectedIndex]
+	v.model.SetSelectedHost(&host)
+
+	passwords := v.model.GetPasswords()
+	if host.PasswordID >= len(passwords) {
+		v.errMsg = "Invalid password ID"
+		return v, nil
 	}
 
-	content += ui.ButtonStyle.Render("e") + " - Edit hosts/passwords    " +
-		ui.ButtonStyle.Render("r") + " - Refresh list    " +
-		ui.ButtonStyle.Render("q") + " - Quit\n"
-
-	// Pomoc nawigacji
-	if len(v.hosts) > 0 && !v.connecting {
-		content += ui.DescriptionStyle.Render("\nUse ↑/↓ arrows to navigate") + "\n"
+	password := passwords[host.PasswordID]
+	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+	if err != nil {
+		v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
+		return v, nil
 	}
 
-	// Statystyki
-	content += "\nStatistics:\n" +
-		ui.DescriptionStyle.Render(
-			fmt.Sprintf("Saved hosts: %s\n",
-				ui.SuccessStyle.Render(fmt.Sprintf("%d", len(v.hosts))),
-			)+
-				fmt.Sprintf("Saved passwords: %s\n",
-					ui.SuccessStyle.Render(fmt.Sprintf("%d", len(v.model.GetPasswords()))),
-				),
-		)
+	transfer := v.model.GetTransfer()
+	if err := transfer.Connect(&host, decryptedPass); err != nil {
+		v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
+		return v, nil
+	}
 
-	// Status i błędy
-	if v.errMsg != "" {
-		content += "\n" + ui.ErrorStyle.Render(v.errMsg)
-	}
-	if v.status != "" {
-		content += "\n" + ui.SuccessStyle.Render(v.status)
-	}
+	v.model.SetActiveView(ui.ViewTransfer)
+	return v, nil
+}
+
+func (v *mainView) View() string {
+	content := ui.TitleStyle.Render("SSH Manager") + "\n\n"
+
+	// Główny layout w stylu MC z dwoma panelami
+	leftPanel := v.renderHostPanel()
+	rightPanel := v.renderDetailsPanel()
+
+	// Połącz panele horyzontalnie
+	mainContent := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		leftPanel,
+		"  │  ", // separator
+		rightPanel,
+	)
+
+	content += mainContent + "\n\n"
+
+	// Status bar
+	statusBar := v.renderStatusBar()
+	content += statusBar + "\n"
+
+	// Command bar
+	cmdBar := v.renderCommandBar()
+	content += cmdBar
 
 	return ui.WindowStyle.Render(content)
 }
 
-func createSSHCommand(host *models.Host, decryptedPass string) *exec.Cmd {
-	sshCommand := fmt.Sprintf("sshpass -p '%s' ssh -o stricthostkeychecking=no %s@%s -p %s",
-		decryptedPass, host.Login, host.IP, host.Port)
+func (v *mainView) renderHostPanel() string {
+	style := ui.PanelStyle.Width(45)
+	title := "Available Hosts"
 
-	cmd := exec.Command("sh", "-c", sshCommand)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var content strings.Builder
+	if len(v.hosts) == 0 {
+		content.WriteString(ui.DescriptionStyle.Render("\n  No hosts available\n  Press 'n' to add new host"))
+	} else {
+		for i, host := range v.hosts {
+			prefix := "  "
+			if i == v.selectedIndex {
+				prefix = ui.SuccessStyle.Render("❯ ")
+				content.WriteString(ui.SelectedItemStyle.Render(
+					fmt.Sprintf("\n%s%s", prefix, host.Name),
+				))
+			} else {
+				content.WriteString(fmt.Sprintf("\n%s%s", prefix, host.Name))
+			}
+		}
+	}
 
-	return cmd
+	return style.Render(title + "\n" + content.String())
+}
+
+func (v *mainView) renderDetailsPanel() string {
+	style := ui.PanelStyle.Width(45)
+	title := "Host Details"
+
+	var content strings.Builder
+	if len(v.hosts) > 0 {
+		host := v.hosts[v.selectedIndex]
+		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Name:"), ui.Infotext.Render(host.Name)))
+		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Description:"), ui.Infotext.Render(host.Description)))
+		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Login:"), ui.Infotext.Render(host.Login)))
+		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Address:"), ui.Infotext.Render(host.IP)))
+		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Port:"), ui.Infotext.Render(host.Port)))
+	}
+
+	return style.Render(title + "\n" + content.String())
+}
+
+func (v *mainView) renderStatusBar() string {
+	var status string
+	if v.errMsg != "" {
+		status = ui.ErrorStyle.Render(v.errMsg)
+	} else if v.status != "" {
+		status = ui.SuccessStyle.Render(v.status)
+	} else if v.model.IsConnected() {
+		if host := v.model.GetSelectedHost(); host != nil {
+			status = ui.SuccessStyle.Render(fmt.Sprintf("Connected to: %s", host.Name))
+		}
+	} else {
+		status = ui.DescriptionStyle.Render("No active connection, Press:")
+	}
+
+	return ui.StatusBarStyle.Render(status)
+}
+
+func (v *mainView) renderCommandBar() string {
+	commands := []struct {
+		key  string
+		desc string
+	}{
+		{"Enter/c", "Connect"},
+		{"t", "File Transfer"},
+		{"e", "Edit"},
+		{"d", "Delete"},
+		{"n", "New Host"},
+		{"q", "Quit"},
+	}
+
+	var cmdBar strings.Builder
+	for i, cmd := range commands {
+		if i > 0 {
+			cmdBar.WriteString(" ∥")
+		}
+		// Odwróć kolejność: najpierw opis, potem klawisz
+		cmdBar.WriteString(ui.DescriptionStyle.Render(cmd.desc))
+		cmdBar.WriteString(" ― ")
+		cmdBar.WriteString(ui.ButtonStyle.Render(cmd.key))
+	}
+
+	return ui.CommandBarStyle.
+		Align(lipgloss.Left).
+		Render(cmdBar.String())
 }
