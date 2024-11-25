@@ -45,7 +45,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
-			v.model.SetStatus("", false)
+			v.model.SetQuitting(true)
 			return v, tea.Quit
 
 		case "up", "k":
@@ -111,8 +111,28 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				host := v.hosts[v.selectedIndex]
 				v.model.SetSelectedHost(&host)
 
-				// NIE łączymy się przez SSH - tylko przechodzimy do widoku transferu
-				// Transfer zostanie zainicjowany w tle w TransferView
+				// Pobierz i zdekoduj hasło aby przygotować połączenie SFTP
+				passwords := v.model.GetPasswords()
+				if host.PasswordID >= len(passwords) {
+					v.errMsg = "Invalid password ID"
+					return v, nil
+				}
+
+				password := passwords[host.PasswordID]
+				decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+				if err != nil {
+					v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
+					return v, nil
+				}
+
+				// Inicjujemy połączenie SFTP przed przejściem do widoku transferu
+				transfer := v.model.GetTransfer()
+				if err := transfer.Connect(&host, decryptedPass); err != nil {
+					v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
+					return v, nil
+				}
+
+				// Przełącz na widok transferu
 				v.model.SetActiveView(ui.ViewTransfer)
 				return v, nil
 			}

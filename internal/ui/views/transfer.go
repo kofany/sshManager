@@ -53,6 +53,12 @@ type Panel struct {
 	active        bool
 }
 
+type transferProgressMsg ssh.TransferProgress
+
+type transferFinishedMsg struct {
+	err error
+}
+
 // transferView implementuje główny widok transferu plików
 type transferView struct {
 	model         *ui.Model
@@ -66,7 +72,12 @@ type transferView struct {
 	progress      ssh.TransferProgress
 	showHelp      bool
 	input         textinput.Model
-	mutex         sync.Mutex // Dodajemy mutex do bezpiecznej aktualizacji stanu
+	mutex         sync.Mutex // Dodajemy mutex do bezpiecznej akt      fU[ualizacji stanu
+}
+
+type connectionStatusMsg struct {
+	connected bool
+	err       error
 }
 
 func NewTransferView(model *ui.Model) *transferView {
@@ -77,10 +88,10 @@ func NewTransferView(model *ui.Model) *transferView {
 	v := &transferView{
 		model: model,
 		localPanel: Panel{
-			path:   getHomeDir(), // Zaczynamy od katalogu domowego
+			path:   getHomeDir(),
 			active: true,
 			entries: []FileEntry{
-				{name: "..", isDir: true}, // Dodajemy ".." do nawigacji w górę
+				{name: "..", isDir: true},
 			},
 		},
 		remotePanel: Panel{
@@ -102,31 +113,31 @@ func NewTransferView(model *ui.Model) *transferView {
 	// Inicjujemy połączenie SFTP w tle
 	if v.model.GetSelectedHost() != nil {
 		go func() {
-			v.mutex.Lock()
-			v.connecting = true
-			v.mutex.Unlock()
-
-			if err := v.ensureConnected(); err != nil {
-				v.mutex.Lock()
-				v.errorMessage = fmt.Sprintf("Connection error: %v", err)
-				v.connecting = false
-				v.mutex.Unlock()
+			// Attempt to establish connection
+			err := v.ensureConnected()
+			if err != nil {
+				v.model.Program.Send(connectionStatusMsg{
+					connected: false,
+					err:       err,
+				})
 				return
 			}
 
-			// Po połączeniu aktualizujemy panel zdalny
-			if err := v.updateRemotePanel(); err != nil {
-				v.mutex.Lock()
-				v.errorMessage = fmt.Sprintf("Failed to load remote directory: %v", err)
-				v.connecting = false
-				v.mutex.Unlock()
+			// Update remote panel
+			err = v.updateRemotePanel()
+			if err != nil {
+				v.model.Program.Send(connectionStatusMsg{
+					connected: false,
+					err:       err,
+				})
 				return
 			}
 
-			v.mutex.Lock()
-			v.connected = true
-			v.connecting = false
-			v.mutex.Unlock()
+			// Send success message
+			v.model.Program.Send(connectionStatusMsg{
+				connected: true,
+				err:       nil,
+			})
 		}()
 	}
 
@@ -188,6 +199,10 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 }
 
 func (v *transferView) Init() tea.Cmd {
+	if !v.connected && !v.connecting && v.model.GetSelectedHost() != nil {
+		v.connecting = true
+		return v.sendConnectionUpdate() // Usuń argument program
+	}
 	return nil
 }
 
@@ -425,17 +440,23 @@ func (v *transferView) enterDirectory(p *Panel) error {
 	return nil
 }
 
-func (v *transferView) copyFile() error {
+// internal/ui/views/transfer.go
+
+// internal/ui/views/transfer.go
+
+func (v *transferView) copyFile() tea.Cmd {
 	srcPanel := v.getActivePanel()
 	dstPanel := v.getInactivePanel()
 
 	if len(srcPanel.entries) == 0 || srcPanel.selectedIndex >= len(srcPanel.entries) {
-		return fmt.Errorf("no file selected")
+		v.handleError(fmt.Errorf("no file selected"))
+		return nil
 	}
 
 	entry := srcPanel.entries[srcPanel.selectedIndex]
 	if entry.isDir {
-		return fmt.Errorf("directory copying not supported yet")
+		v.handleError(fmt.Errorf("directory copying not supported yet"))
+		return nil
 	}
 
 	// Przygotuj ścieżki
@@ -447,56 +468,13 @@ func (v *transferView) copyFile() error {
 	v.statusMessage = fmt.Sprintf("Copying %s...", entry.name)
 	v.mutex.Unlock()
 
-	// Utwórz kanały
-	progressChan := make(chan ssh.TransferProgress, 100) // Buforowany kanał
-	doneChan := make(chan error, 1)
-	updateChan := make(chan tea.Msg)
+	transfer := v.model.GetTransfer()
 
-	// Goroutine do transferu
-	go func() {
-		var err error
-		if srcPanel == &v.localPanel {
-			err = v.model.GetTransfer().UploadFile(srcPath, dstPath, progressChan)
-		} else {
-			err = v.model.GetTransfer().DownloadFile(srcPath, dstPath, progressChan)
-		}
-		doneChan <- err
-		close(progressChan)
-	}()
+	// Określ, czy to jest upload czy download
+	upload := srcPanel == &v.localPanel
 
-	// Goroutine do aktualizacji UI
-	go func() {
-		for {
-			select {
-			case progress, ok := <-progressChan:
-				if !ok {
-					return
-				}
-				v.mutex.Lock()
-				v.progress = progress
-				v.mutex.Unlock()
-				updateChan <- ssh.TransferProgress(progress)
-			case err := <-doneChan:
-				v.mutex.Lock()
-				v.transferring = false
-				if err != nil {
-					v.errorMessage = fmt.Sprintf("Transfer error: %v", err)
-				} else {
-					v.statusMessage = "Transfer completed successfully"
-					// Odśwież panel docelowy
-					if dstPanel == &v.localPanel {
-						v.updateLocalPanel()
-					} else {
-						v.updateRemotePanel()
-					}
-				}
-				v.mutex.Unlock()
-				return
-			}
-		}
-	}()
-
-	return nil
+	// Zwróć komendę rozpoczynającą transfer
+	return v.startTransferCmd(srcPath, dstPath, transfer, upload)
 }
 
 // deleteFile usuwa wybrany plik
@@ -646,8 +624,46 @@ func (v *transferView) handleError(err error) {
 // internal/ui/views/transfer.go - Part 4
 
 // Update obsługuje zdarzenia i aktualizuje stan
+// internal/ui/views/transfer.go
+
 func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case transferProgressMsg:
+		v.mutex.Lock()
+		v.progress = ssh.TransferProgress(msg)
+		v.mutex.Unlock()
+		return v, nil
+	case transferFinishedMsg:
+		v.mutex.Lock()
+		v.transferring = false
+		if msg.err != nil {
+			v.errorMessage = fmt.Sprintf("Transfer error: %v", msg.err)
+		} else {
+			v.statusMessage = "Transfer completed successfully"
+			// Odśwież panel docelowy
+			dstPanel := v.getInactivePanel()
+			if dstPanel == &v.localPanel {
+				v.updateLocalPanel()
+			} else {
+				v.updateRemotePanel()
+			}
+		}
+		v.mutex.Unlock()
+		return v, nil
+	case connectionStatusMsg:
+		v.mutex.Lock()
+		defer v.mutex.Unlock()
+		v.connecting = false
+		if msg.err != nil {
+			v.connected = false
+			v.errorMessage = fmt.Sprintf("Connection error: %v", msg.err)
+			v.statusMessage = ""
+		} else {
+			v.connected = msg.connected
+			v.statusMessage = "Connection established"
+			v.errorMessage = ""
+		}
+		return v, nil
 	case tea.KeyMsg:
 		if v.isWaitingForInput() {
 			if msg.Type == tea.KeyEnter {
@@ -704,9 +720,8 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "f5", "c":
 			if !v.transferring {
-				if err := v.copyFile(); err != nil {
-					v.handleError(err)
-				}
+				cmd := v.copyFile()
+				return v, cmd
 			}
 			return v, nil
 
@@ -796,14 +811,15 @@ func (v *transferView) handleCommand(cmd string) error {
 	return fmt.Errorf("unknown command")
 }
 
-// formatProgressBar tworzy pasek postępu
+// internal/ui/views/transfer.go
+
 func (v *transferView) formatProgressBar(width int) string {
 	if !v.transferring || v.progress.TotalBytes == 0 {
 		return ""
 	}
 
 	percentage := float64(v.progress.TransferredBytes) / float64(v.progress.TotalBytes)
-	barWidth := width - 10 // Zostaw miejsce na procenty
+	barWidth := width - 30 // Zostaw miejsce na procenty i prędkość
 	completedWidth := int(float64(barWidth) * percentage)
 
 	bar := fmt.Sprintf("[%s%s] %3.0f%%",
@@ -811,7 +827,12 @@ func (v *transferView) formatProgressBar(width int) string {
 		strings.Repeat(" ", barWidth-completedWidth),
 		percentage*100)
 
-	speed := float64(v.progress.TransferredBytes) / time.Since(v.progress.StartTime).Seconds()
+	elapsed := time.Since(v.progress.StartTime).Seconds()
+	if elapsed == 0 {
+		elapsed = 1 // Zapobieganie dzieleniu przez zero
+	}
+	speed := float64(v.progress.TransferredBytes) / elapsed
+
 	return fmt.Sprintf("%s %s %s/s",
 		v.progress.FileName,
 		bar,
@@ -850,7 +871,6 @@ var helpText = `
 func (v *transferView) View() string {
 	var content strings.Builder
 
-	// Nagłówek
 	content.WriteString(ui.TitleStyle.Render("File Transfer"))
 	if v.connected {
 		if host := v.model.GetSelectedHost(); host != nil {
@@ -859,13 +879,16 @@ func (v *transferView) View() string {
 			))
 		}
 	} else if host := v.model.GetSelectedHost(); host != nil {
-		content.WriteString(ui.ErrorStyle.Render(
-			fmt.Sprintf(" - Not connected to %s (%s)", host.Name, host.IP),
-		))
+		if v.connecting {
+			content.WriteString(ui.DescriptionStyle.Render(" - Establishing connection..."))
+		} else {
+			content.WriteString(ui.ErrorStyle.Render(
+				fmt.Sprintf(" - Not connected to %s (%s)", host.Name, host.IP),
+			))
+		}
 	}
 	content.WriteString("\n\n")
 
-	// Obsługa stanu łączenia
 	if v.connecting {
 		content.WriteString(ui.DescriptionStyle.Render("Establishing SFTP connection..."))
 		return ui.WindowStyle.Render(content.String())
@@ -1087,35 +1110,30 @@ func renderFileList(entries []FileEntry, selected int, active bool, width int) s
 }
 
 func (v *transferView) ensureConnected() error {
-	if !v.connected {
-		transfer := v.model.GetTransfer()
-		if transfer == nil {
-			return fmt.Errorf("no transfer client available")
-		}
-
-		host := v.model.GetSelectedHost()
-		if host == nil {
-			return fmt.Errorf("no host selected")
-		}
-
-		// Pobierz i odszyfruj hasło
-		passwords := v.model.GetPasswords()
-		if host.PasswordID >= len(passwords) {
-			return fmt.Errorf("invalid password ID")
-		}
-		password := passwords[host.PasswordID]
-		decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-		if err != nil {
-			return fmt.Errorf("failed to decrypt password: %v", err)
-		}
-
-		// Nawiąż połączenie SFTP
-		if err := transfer.Connect(host, decryptedPass); err != nil {
-			return fmt.Errorf("failed to establish SFTP connection: %v", err)
-		}
-
-		v.setConnected(true)
+	transfer := v.model.GetTransfer()
+	if transfer == nil {
+		return fmt.Errorf("no transfer client available")
 	}
+
+	host := v.model.GetSelectedHost()
+	if host == nil {
+		return fmt.Errorf("no host selected")
+	}
+
+	passwords := v.model.GetPasswords()
+	if host.PasswordID >= len(passwords) {
+		return fmt.Errorf("invalid password ID")
+	}
+	password := passwords[host.PasswordID]
+	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+	if err != nil {
+		return fmt.Errorf("failed to decrypt password: %v", err)
+	}
+
+	if err := transfer.Connect(host, decryptedPass); err != nil {
+		return fmt.Errorf("failed to establish SFTP connection: %v", err)
+	}
+
 	return nil
 }
 
@@ -1123,4 +1141,49 @@ func (v *transferView) setConnected(connected bool) {
 	v.mutex.Lock()
 	defer v.mutex.Unlock()
 	v.connected = connected
+}
+
+func (v *transferView) sendConnectionUpdate() tea.Cmd {
+	return func() tea.Msg {
+		return connectionStatusMsg{
+			connected: v.connected,
+			err:       nil,
+		}
+	}
+}
+
+// internal/ui/views/transfer.go
+
+// internal/ui/views/transfer.go
+
+func (v *transferView) startTransferCmd(srcPath string, dstPath string, transfer *ssh.FileTransfer, upload bool) tea.Cmd {
+	return func() tea.Msg {
+		progressChan := make(chan ssh.TransferProgress)
+		doneChan := make(chan error, 1)
+
+		// Uruchom transfer w goroutine
+		go func() {
+			var err error
+			if upload {
+				err = transfer.UploadFile(srcPath, dstPath, progressChan)
+			} else {
+				err = transfer.DownloadFile(srcPath, dstPath, progressChan)
+			}
+			doneChan <- err
+			close(progressChan)
+		}()
+
+		// Goroutine do czytania postępu i wysyłania wiadomości
+		go func() {
+			for progress := range progressChan {
+				// Wysyłaj wiadomości o postępie
+				v.model.Program.Send(transferProgressMsg(progress))
+			}
+			// Po zakończeniu transferu, wyślij wiadomość transferFinishedMsg
+			err := <-doneChan
+			v.model.Program.Send(transferFinishedMsg{err: err})
+		}()
+
+		return nil
+	}
 }

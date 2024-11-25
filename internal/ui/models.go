@@ -107,11 +107,16 @@ type Model struct {
 	quitting     bool
 	config       *config.Manager
 	cipher       *crypto.Cipher
+	Program      *tea.Program // Zmiana z małej litery na wielką
 }
 
 // Init implementuje tea.Model
 func (m Model) Init() tea.Cmd {
 	return textinput.Blink
+}
+
+func (m *Model) SetProgram(p *tea.Program) {
+	m.Program = p
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -205,7 +210,10 @@ func (m Model) viewMain() string {
 // NewModel tworzy nowy model aplikacji
 // internal/ui/models.go - w funkcji NewModel() zaktualizuj inicjalizację configManager
 
-func NewModel() Model {
+// internal/ui/models.go
+
+// NewModel tworzy nowy model aplikacji
+func NewModel() *Model {
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
 		configPath = config.DefaultConfigFileName
@@ -232,7 +240,7 @@ func NewModel() Model {
 	m.passwords = configManager.GetPasswords()
 	m.UpdateLists()
 
-	return m
+	return &m // Zwracamy wskaźnik do m
 }
 
 func (m *Model) SaveConfig() interface{} {
@@ -550,4 +558,14 @@ func (m *Model) GetActiveView() View {
 
 func (m *Model) SetTransfer(transfer *ssh.FileTransfer) {
 	m.transfer = transfer
+}
+
+func (m *Model) IsQuitting() bool {
+	return m.quitting
+}
+
+// internal/ui/models.go
+
+func (m *Model) SetQuitting(quitting bool) {
+	m.quitting = quitting
 }

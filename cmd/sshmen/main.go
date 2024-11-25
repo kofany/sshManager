@@ -13,7 +13,7 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 type mode int
@@ -32,8 +32,7 @@ type programModel struct {
 }
 
 func initialModel() *programModel {
-	uiModel := &ui.Model{}
-	*uiModel = ui.NewModel()
+	uiModel := ui.NewModel()
 	mainView := views.NewMainView(uiModel)
 
 	return &programModel{
@@ -45,6 +44,12 @@ func initialModel() *programModel {
 
 func (m *programModel) Init() tea.Cmd {
 	return m.currentView.Init()
+}
+
+func (m *programModel) SetProgram(p *tea.Program) {
+	if m.uiModel != nil {
+		m.uiModel.SetProgram(p)
+	}
 }
 
 func (m *programModel) updateCurrentView() {
@@ -59,13 +64,9 @@ func (m *programModel) updateCurrentView() {
 }
 
 func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			m.quitting = true
-			return m, tea.Quit
-		}
+	// Sprawdź czy użytkownik chce zakończyć program
+	if m.uiModel.IsQuitting() || m.quitting {
+		return m, tea.Quit
 	}
 
 	// Zapisz aktualny widok
@@ -84,7 +85,7 @@ func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *programModel) View() string {
-	if m.quitting {
+	if m.quitting || m.uiModel.IsQuitting() {
 		return "Goodbye!\n"
 	}
 	return m.currentView.View()
@@ -106,7 +107,7 @@ func main() {
 
 	// Wczytanie klucza szyfrowania
 	fmt.Print("Enter encryption key: ")
-	bytePassword, err := terminal.ReadPassword(int(syscall.Stdin))
+	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
 	if err != nil {
 		fmt.Printf("Error reading encryption key: %v\n", err)
 		os.Exit(1)
@@ -134,6 +135,7 @@ func main() {
 
 	// Uruchomienie programu
 	p := tea.NewProgram(m)
+	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v", err)
 		os.Exit(1)

@@ -152,6 +152,8 @@ func (ft *FileTransfer) IsConnected() bool {
 	return ft.connected && ft.sftpClient != nil
 }
 
+// internal/ssh/ssh_transfer.go
+
 func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
 	if !ft.connected {
 		return fmt.Errorf("not connected")
@@ -180,104 +182,120 @@ func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan ch
 		StartTime:  time.Now(),
 	}
 
-	buf := make([]byte, 32*1024)
+	bufSize := 128 * 1024 // Zwiększenie rozmiaru bufora do 128 KB
+	buf := make([]byte, bufSize)
 	for {
 		n, err := srcFile.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("error reading local file: %v", err)
 		}
 
-		if _, err := dstFile.Write(buf[:n]); err != nil {
-			return fmt.Errorf("error writing remote file: %v", err)
+		if n > 0 {
+			written, writeErr := dstFile.Write(buf[:n])
+			if writeErr != nil {
+				return fmt.Errorf("error writing remote file: %v", writeErr)
+			}
+			if written != n {
+				return fmt.Errorf("incomplete write: wrote %d bytes instead of %d", written, n)
+			}
+
+			progress.TransferredBytes += int64(n)
+			if progressChan != nil {
+				select {
+				case progressChan <- progress:
+				default:
+				}
+			}
 		}
 
-		progress.TransferredBytes += int64(n)
+		if err == io.EOF {
+			break
+		}
+	}
+
+	// Upewnij się, że dane zostały zapisane na zdalnym dysku
+	if err := dstFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync remote file: %v", err)
+	}
+
+	// Wyślij końcową aktualizację postępu
+	if progressChan != nil {
 		select {
 		case progressChan <- progress:
 		default:
 		}
-
-		// Dodaj małe opóźnienie aby nie przeciążać UI
-		time.Sleep(time.Millisecond * 50)
 	}
 
 	return nil
 }
+
+// internal/ssh/ssh_transfer.go
 
 func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan chan<- TransferProgress) error {
 	if !ft.connected {
 		return fmt.Errorf("not connected")
 	}
 
-	// Otwórz zdalny plik
 	srcFile, err := ft.sftpClient.Open(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to open remote file: %v", err)
 	}
 	defer srcFile.Close()
 
-	// Utwórz lokalny plik
 	dstFile, err := os.Create(localPath)
 	if err != nil {
 		return fmt.Errorf("failed to create local file: %v", err)
 	}
 	defer dstFile.Close()
 
-	// Przygotuj informacje o transferze
 	fileInfo, err := srcFile.Stat()
 	if err != nil {
 		return fmt.Errorf("failed to get file info: %v", err)
 	}
 
-	// Inicjalizacja postępu
 	progress := TransferProgress{
 		FileName:   filepath.Base(remotePath),
 		TotalBytes: fileInfo.Size(),
 		StartTime:  time.Now(),
 	}
 
-	// Utwórz bufor do kopiowania
-	buf := make([]byte, 32*1024)
-	lastUpdate := time.Now()
-	updateInterval := time.Millisecond * 100 // Aktualizuj co 100ms
-
-	// Kopiuj z monitorowaniem postępu
+	bufSize := 128 * 1024 // Zwiększenie rozmiaru bufora do 128 KB
+	buf := make([]byte, bufSize)
 	for {
 		n, err := srcFile.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("error reading remote file: %v", err)
 		}
 
-		// Zapisz dane
-		if _, err := dstFile.Write(buf[:n]); err != nil {
-			return fmt.Errorf("error writing local file: %v", err)
-		}
+		if n > 0 {
+			written, writeErr := dstFile.Write(buf[:n])
+			if writeErr != nil {
+				return fmt.Errorf("error writing local file: %v", writeErr)
+			}
+			if written != n {
+				return fmt.Errorf("incomplete write: wrote %d bytes instead of %d", written, n)
+			}
 
-		// Aktualizuj postęp
-		progress.TransferredBytes += int64(n)
-
-		// Wysyłaj aktualizacje postępu tylko co określony interwał
-		if time.Since(lastUpdate) >= updateInterval {
+			progress.TransferredBytes += int64(n)
 			if progressChan != nil {
 				select {
 				case progressChan <- progress:
-					lastUpdate = time.Now()
 				default:
-					// Jeśli kanał jest zablokowany, pomijamy aktualizację
 				}
 			}
-			// Dodaj małe opóźnienie aby nie przeciążać UI
-			time.Sleep(time.Millisecond * 50)
+		}
+
+		if err == io.EOF {
+			break
 		}
 	}
 
-	// Wyślij końcową aktualizację
+	// Upewnij się, że dane zostały zapisane na lokalnym dysku
+	if err := dstFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync local file: %v", err)
+	}
+
+	// Wyślij końcową aktualizację postępu
 	if progressChan != nil {
 		select {
 		case progressChan <- progress:

@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/pkg/sftp v1.13.7
 	golang.org/x/crypto v0.29.0
+	golang.org/x/term v0.26.0
 )
 
 require (
@@ -28,6 +29,5 @@ require (
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	golang.org/x/sync v0.9.0 // indirect
 	golang.org/x/sys v0.27.0 // indirect
-	golang.org/x/term v0.26.0 // indirect
 	golang.org/x/text v0.20.0 // indirect
 )
