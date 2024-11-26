@@ -211,12 +211,6 @@ func (m Model) viewMain() string {
 	)
 }
 
-// NewModel tworzy nowy model aplikacji
-// internal/ui/models.go - w funkcji NewModel() zaktualizuj inicjalizację configManager
-
-// internal/ui/models.go
-
-// NewModel tworzy nowy model aplikacji
 func NewModel() *Model {
 	// Pobierz aktualny rozmiar terminala
 	width, height, _ := term.GetSize(int(os.Stdout.Fd()))
@@ -582,4 +576,9 @@ func (m *Model) GetTerminalWidth() int {
 
 func (m *Model) GetTerminalHeight() int {
 	return m.terminalHeight
+}
+
+func (m *Model) UpdateWindowSize(width, height int) {
+	m.terminalWidth = width
+	m.terminalHeight = height
 }

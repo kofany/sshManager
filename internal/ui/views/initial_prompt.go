@@ -32,6 +32,8 @@ func (m *initialPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyRunes:
@@ -48,7 +50,13 @@ func (m *initialPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Najpierw wyczyść ekran, potem wyślij hasło
 			return m, tea.Sequence(
 				tea.ClearScreen,
-				tea.ClearScrollArea, // Dodane czyszczenie obszaru przewijania
+				tea.ClearScrollArea,
+				func() tea.Msg {
+					return tea.WindowSizeMsg{
+						Width:  m.width,
+						Height: m.height,
+					}
+				},
 				func() tea.Msg {
 					return messages.PasswordEnteredMsg(string(m.password))
 				},
@@ -59,7 +67,6 @@ func (m *initialPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-
 func (m *initialPromptModel) View() string {
 	// Definicja stylów
 	asciiArtStyle := lipgloss.NewStyle().

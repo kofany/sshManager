@@ -60,7 +60,9 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
 		v.height = msg.Height
-		// ...reszta kodu...
+		// Dodajemy aktualizację rozmiaru w głównym modelu
+		v.model.UpdateWindowSize(msg.Width, msg.Height)
+		return v, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -92,12 +94,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v.handleConnect()
 
-		case "t":
-			if v.connecting || len(v.hosts) == 0 {
-				return v, nil
-			}
-			return v.handleTransfer()
-
 		case "e":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
@@ -105,8 +101,22 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			host := v.hosts[v.selectedIndex]
 			v.model.SetSelectedHost(&host)
 			v.model.SetActiveView(ui.ViewEdit)
-			return v, nil
+			// Dodajemy sequence komend
+			return v, tea.Sequence(
+				tea.ClearScreen,
+				func() tea.Msg {
+					return tea.WindowSizeMsg{
+						Width:  v.width,
+						Height: v.height,
+					}
+				},
+			)
 
+		case "t":
+			if v.connecting || len(v.hosts) == 0 {
+				return v, nil
+			}
+			return v.handleTransfer()
 		case "d":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
@@ -197,6 +207,7 @@ func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
+// W pliku internal/ui/views/main.go
 func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
 	host := v.hosts[v.selectedIndex]
 	v.model.SetSelectedHost(&host)
@@ -221,7 +232,17 @@ func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
 	}
 
 	v.model.SetActiveView(ui.ViewTransfer)
-	return v, nil
+
+	// Dodajemy sequence komend
+	return v, tea.Sequence(
+		tea.ClearScreen,
+		func() tea.Msg {
+			return tea.WindowSizeMsg{
+				Width:  v.width,
+				Height: v.height,
+			}
+		},
+	)
 }
 
 func (v *mainView) View() string {

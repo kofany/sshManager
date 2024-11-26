@@ -358,6 +358,8 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
 		v.height = msg.Height
+		// Dodajemy aktualizację rozmiaru w głównym modelu
+		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
 	case tea.KeyMsg:
 		switch msg.String() {

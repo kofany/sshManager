@@ -750,17 +750,14 @@ func (v *transferView) handleError(err error) {
 	}
 }
 
-// internal/ui/views/transfer.go - Part 4
-
-// Update obsługuje zdarzenia i aktualizuje stan
-// internal/ui/views/transfer.go
-
 func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		v.mutex.Lock()
 		v.width = msg.Width
 		v.height = msg.Height
+		// Dodajemy aktualizację rozmiaru w głównym modelu
+		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		v.mutex.Unlock()
 		return v, nil
 	case transferProgressMsg:
