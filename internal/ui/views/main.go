@@ -1,4 +1,3 @@
-// internal/ui/views/main.go
 package views
 
 import (
@@ -22,6 +21,8 @@ type mainView struct {
 	errMsg        string
 	status        string
 	connecting    bool
+	width         int // Dodane
+	height        int // Dodane
 }
 
 type connectError string
@@ -40,16 +41,27 @@ func NewMainView(model *ui.Model) *mainView {
 		showHostList: true,
 		hosts:        model.GetHosts(),
 		currentDir:   getHomeDir(),
+		width:        model.GetTerminalWidth(),  // Dodane
+		height:       model.GetTerminalHeight(), // Dodane
+
 	}
 }
 
 func (v *mainView) Init() tea.Cmd {
-	return nil
+	return tea.Sequence(
+		tea.ClearScreen,
+		tea.ClearScrollArea,
+		tea.EnterAltScreen,
+	)
 }
 
-// internal/ui/views/main.go - Part 2
 func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		v.width = msg.Width
+		v.height = msg.Height
+		// ...reszta kodu...
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -73,15 +85,8 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				v.errMsg = ""
 			}
-		case "enter":
+		case "enter", "c":
 			// Jeśli trwa łączenie lub nie ma hostów, ignorujemy
-			if v.connecting || len(v.hosts) == 0 {
-				return v, nil
-			}
-			// Używamy tej samej logiki co dla klawisza "c"
-			return v.handleConnect()
-
-		case "c":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
@@ -133,8 +138,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			v.errMsg = ""
 		}
-		// Dodaj komendę clear screen
-		return v, tea.ClearScreen
+		return v, nil
 
 	case connectError:
 		v.errMsg = msg.Error()
@@ -221,7 +225,9 @@ func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
 }
 
 func (v *mainView) View() string {
-	content := ui.TitleStyle.Render("SSH Manager") + "\n\n"
+	// Przygotuj główną zawartość
+	var content strings.Builder
+	content.WriteString(ui.TitleStyle.Render("SSH Manager") + "\n\n")
 
 	// Główny layout w stylu MC z dwoma panelami
 	leftPanel := v.renderHostPanel()
@@ -231,21 +237,33 @@ func (v *mainView) View() string {
 	mainContent := lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		leftPanel,
-		"  │  ", // separator
+		"  +  ", // separator
 		rightPanel,
 	)
 
-	content += mainContent + "\n\n"
+	content.WriteString(mainContent + "\n\n")
 
 	// Status bar
 	statusBar := v.renderStatusBar()
-	content += statusBar + "\n"
+	content.WriteString(statusBar + "\n")
 
 	// Command bar
 	cmdBar := v.renderCommandBar()
-	content += cmdBar
+	content.WriteString(cmdBar)
 
-	return ui.WindowStyle.Render(content)
+	// Zastosuj styl ramki do całej zawartości
+	framedContent := ui.WindowStyle.Render(content.String())
+
+	// Zawsze używaj wymiarów do wycentrowania
+	return lipgloss.Place(
+		v.width,
+		v.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		framedContent,
+		lipgloss.WithWhitespaceChars(""),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+	)
 }
 
 func (v *mainView) renderHostPanel() string {
@@ -258,14 +276,24 @@ func (v *mainView) renderHostPanel() string {
 	} else {
 		for i, host := range v.hosts {
 			prefix := "  "
+			var line string
+
+			// Renderujemy nazwę hosta z użyciem HostStyle
+			hostName := ui.HostStyle.Render(host.Name)
+
 			if i == v.selectedIndex {
+				// Ustawiamy prefix dla zaznaczonego hosta
 				prefix = ui.SuccessStyle.Render("❯ ")
-				content.WriteString(ui.SelectedItemStyle.Render(
-					fmt.Sprintf("\n%s%s", prefix, host.Name),
-				))
+				// Budujemy linię z użyciem SelectedItemStyle i HostStyle
+				line = ui.SelectedItemStyle.Render(
+					fmt.Sprintf("\n%s%s", prefix, hostName),
+				)
 			} else {
-				content.WriteString(fmt.Sprintf("\n%s%s", prefix, host.Name))
+				// Budujemy linię dla niezaznaczonego hosta z HostStyle
+				line = fmt.Sprintf("\n%s%s", prefix, hostName)
 			}
+			// Dodajemy linię do zawartości
+			content.WriteString(line)
 		}
 	}
 
@@ -333,4 +361,8 @@ func (v *mainView) renderCommandBar() string {
 	return ui.CommandBarStyle.
 		Align(lipgloss.Left).
 		Render(cmdBar.String())
+}
+
+func (v *mainView) IsQuitting() bool {
+	return v.model.IsQuitting()
 }

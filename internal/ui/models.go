@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"sshManager/internal/config"
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 )
 
 // KeyMap definiuje skróty klawiszowe
@@ -91,23 +93,25 @@ const (
 
 // Model reprezentuje główny model aplikacji
 type Model struct {
-	keys         KeyMap
-	status       Status
-	activeView   View
-	sshClient    *ssh.SSHClient // tylko dla trybu SSH
-	transfer     *ssh.FileTransfer
-	hosts        []models.Host
-	passwords    []models.Password
-	selectedHost *models.Host
-	hostList     list.Model
-	passwordList list.Model
-	input        textinput.Model
-	width        int
-	height       int
-	quitting     bool
-	config       *config.Manager
-	cipher       *crypto.Cipher
-	Program      *tea.Program // Zmiana z małej litery na wielką
+	keys           KeyMap
+	status         Status
+	activeView     View
+	sshClient      *ssh.SSHClient // tylko dla trybu SSH
+	transfer       *ssh.FileTransfer
+	hosts          []models.Host
+	passwords      []models.Password
+	selectedHost   *models.Host
+	hostList       list.Model
+	passwordList   list.Model
+	input          textinput.Model
+	width          int
+	height         int
+	quitting       bool
+	config         *config.Manager
+	cipher         *crypto.Cipher
+	Program        *tea.Program // Zmiana z małej litery na wielką
+	terminalWidth  int
+	terminalHeight int
 }
 
 // Init implementuje tea.Model
@@ -214,6 +218,9 @@ func (m Model) viewMain() string {
 
 // NewModel tworzy nowy model aplikacji
 func NewModel() *Model {
+	// Pobierz aktualny rozmiar terminala
+	width, height, _ := term.GetSize(int(os.Stdout.Fd()))
+
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
 		configPath = config.DefaultConfigFileName
@@ -222,12 +229,14 @@ func NewModel() *Model {
 	configManager := config.NewManager(configPath)
 
 	m := Model{
-		keys:         DefaultKeyMap(),
-		activeView:   ViewMain,
-		input:        textinput.New(),
-		hostList:     initializeList("Hosty"),
-		passwordList: initializeList("Hasła"),
-		config:       configManager,
+		keys:           DefaultKeyMap(),
+		activeView:     ViewMain,
+		input:          textinput.New(),
+		hostList:       initializeList("Hosty"),
+		passwordList:   initializeList("Hasła"),
+		config:         configManager,
+		terminalWidth:  width,  // Dodane
+		terminalHeight: height, // Dodane
 	}
 
 	// Wczytaj zapisaną konfigurację
@@ -560,4 +569,17 @@ func (m *Model) IsQuitting() bool {
 
 func (m *Model) SetQuitting(quitting bool) {
 	m.quitting = quitting
+}
+
+func (m *Model) SetTerminalSize(width, height int) {
+	m.terminalWidth = width
+	m.terminalHeight = height
+}
+
+func (m *Model) GetTerminalWidth() int {
+	return m.terminalWidth
+}
+
+func (m *Model) GetTerminalHeight() int {
+	return m.terminalHeight
 }

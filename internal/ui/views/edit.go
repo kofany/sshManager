@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type editMode int
@@ -38,12 +39,16 @@ type editView struct {
 	passwords             []models.Password
 	selectedItemIndex     int
 	deleteConfirmation    bool
+	width                 int // Dodane
+	height                int // Dodane
 }
 
 func NewEditView(model *ui.Model) *editView {
 	v := &editView{
 		model:  model,
 		inputs: make([]textinput.Model, 6), // Name, Description, Login, IP, Port, Password
+		width:  model.GetTerminalWidth(),   // Dodane
+		height: model.GetTerminalHeight(),  // Dodane
 	}
 
 	// Initialize text inputs
@@ -82,22 +87,24 @@ func (v *editView) Init() tea.Cmd {
 func (v *editView) View() string {
 	var content string
 
+	contentWidth := min(v.width-40, 160) // Maksymalna szerokość z marginesami
+
 	switch v.mode {
 	case modeHostList:
-		content = v.renderHostList()
+		content = v.renderHostList(contentWidth)
 	case modePasswordList:
-		content = v.renderPasswordList()
+		content = v.renderPasswordList(contentWidth)
 	case modeSelectPassword:
-		content = v.renderPasswordSelection()
+		content = v.renderPasswordSelection(contentWidth)
 	default:
 		if v.editing {
 			if v.editingHost {
-				content = v.renderHostEdit()
+				content = v.renderHostEdit(contentWidth)
 			} else {
-				content = v.renderPasswordEdit()
+				content = v.renderPasswordEdit(contentWidth)
 			}
 		} else {
-			content = v.renderMainMenu()
+			content = v.renderMainMenu(contentWidth)
 		}
 	}
 
@@ -105,143 +112,43 @@ func (v *editView) View() string {
 		content += "\n" + ui.ErrorStyle.Render(v.errorMsg)
 	}
 
-	return ui.WindowStyle.Render(content)
-}
+	finalContent := ui.WindowStyle.
+		Width(contentWidth).
+		Render(content)
 
-func (v *editView) renderHostList() string {
-	content := ui.TitleStyle.Render("Host List") + "\n\n"
-
-	if len(v.hosts) == 0 {
-		content += ui.DescriptionStyle.Render("No hosts available. Press 'h' to add a new host.") + "\n"
-	} else {
-		for i, host := range v.hosts {
-			prefix := "  "
-			if i == v.selectedItemIndex {
-				prefix = "> "
-				content += ui.SelectedItemStyle.Render(
-					fmt.Sprintf("%s%s (%s)\n", prefix, host.Name, host.Description),
-				)
-			} else {
-				content += fmt.Sprintf("%s%s (%s)\n", prefix, host.Name, host.Description)
-			}
-		}
-	}
-
-	content += "\n" + v.renderControls(
-		Control{"e", "Edit"},
-		Control{"d", "Delete"},
-		Control{"ESC", "Back"},
+	return lipgloss.Place(
+		v.width,
+		v.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		finalContent,
+		lipgloss.WithWhitespaceChars(""),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
-
-	return content
 }
 
-func (v *editView) renderPasswordList() string {
-	content := ui.TitleStyle.Render("Password List") + "\n\n"
-
-	if len(v.passwords) == 0 {
-		content += ui.DescriptionStyle.Render("No passwords available. Press 'p' to add a new password.") + "\n"
-	} else {
-		for i, pass := range v.passwords {
-			prefix := "  "
-			if i == v.selectedItemIndex {
-				prefix = "> "
-				content += ui.SelectedItemStyle.Render(
-					fmt.Sprintf("%s%s\n", prefix, pass.Description),
-				)
-			} else {
-				content += fmt.Sprintf("%s%s\n", prefix, pass.Description)
-			}
-		}
-	}
-
-	content += "\n" + v.renderControls(
-		Control{"e", "Edit"},
-		Control{"d", "Delete"},
-		Control{"ESC", "Back"},
-	)
-
-	return content
-}
-
-func (v *editView) renderHostEdit() string {
-	title := "Add New Host"
-	if v.currentHost != nil {
-		title = "Edit Host"
-	}
-
-	content := ui.TitleStyle.Render(title) + "\n\n"
-
-	labels := []string{
-		"Host Name:",
-		"Description:",
-		"Login:",
-		"IP/Host:",
-		"Port:",
-	}
-
-	for i, input := range v.inputs[:5] {
-		content += labels[i] + "\n"
-		if i == v.activeField {
-			content += ui.SelectedItemStyle.Render(input.View()) + "\n\n"
-		} else {
-			content += input.View() + "\n\n"
-		}
-	}
-
-	content += v.renderControls(
-		Control{"ENTER", "Save"},
-		Control{"ESC", "Cancel"},
-		Control{"↑/↓", "Navigate"},
-	)
-
-	return content
-}
-
-func (v *editView) renderPasswordEdit() string {
-	title := "Add New Password"
-	if v.currentPassword != nil {
-		title = "Edit Password"
-	}
-
-	content := ui.TitleStyle.Render(title) + "\n\n"
-
-	labels := []string{
-		"Description:",
-		"Password:",
-	}
-
-	for i, input := range v.inputs[:2] {
-		content += labels[i] + "\n"
-		if i == v.activeField {
-			content += ui.SelectedItemStyle.Render(input.View()) + "\n\n"
-		} else {
-			content += input.View() + "\n\n"
-		}
-	}
-
-	content += v.renderControls(
-		Control{"ENTER", "Save"},
-		Control{"ESC", "Cancel"},
-		Control{"↑/↓", "Navigate"},
-	)
-
-	return content
-}
-
-func (v *editView) renderPasswordSelection() string {
+func (v *editView) renderPasswordSelection(width int) string {
 	content := ui.TitleStyle.Render("Select Password for Host") + "\n\n"
 
 	if len(v.passwordList) == 0 {
 		content += ui.ErrorStyle.Render("No passwords available. Please add a password first.") + "\n"
 	} else {
+		listWidth := width - 4 // Margines wewnętrzny
 		for i, pwd := range v.passwordList {
 			prefix := "  "
 			if i == v.selectedPasswordIndex {
 				prefix = "> "
-				content += ui.SelectedItemStyle.Render(prefix + pwd.Description + "\n")
+				line := fmt.Sprintf("%s%-*s",
+					prefix,
+					listWidth-len(prefix),
+					pwd.Description)
+				content += ui.SelectedItemStyle.Render(line) + "\n"
 			} else {
-				content += prefix + pwd.Description + "\n"
+				line := fmt.Sprintf("%s%-*s",
+					prefix,
+					listWidth-len(prefix),
+					pwd.Description)
+				content += line + "\n"
 			}
 		}
 	}
@@ -254,7 +161,154 @@ func (v *editView) renderPasswordSelection() string {
 	return content
 }
 
-func (v *editView) renderMainMenu() string {
+func (v *editView) renderHostList(width int) string {
+	content := ui.TitleStyle.Render("Host List") + "\n\n"
+
+	if len(v.hosts) == 0 {
+		content += ui.DescriptionStyle.Render("No hosts available. Press 'h' to add a new host.") + "\n"
+	} else {
+		listWidth := width - 4     // Margines wewnętrzny
+		nameWidth := listWidth / 2 // Połowa szerokości na nazwę
+
+		for i, host := range v.hosts {
+			prefix := "  "
+			if i == v.selectedItemIndex {
+				prefix = "> "
+			}
+
+			// Formatuj linię z nazwą i opisem obok siebie
+			line := fmt.Sprintf("%s%-*s %-*s",
+				prefix,
+				nameWidth,
+				host.Name,
+				listWidth-nameWidth-len(prefix),
+				"("+host.Description+")")
+
+			if i == v.selectedItemIndex {
+				content += ui.SelectedItemStyle.Render(line) + "\n"
+			} else {
+				content += line + "\n"
+			}
+		}
+	}
+
+	content += "\n" + v.renderControls(
+		Control{"e", "Edit"},
+		Control{"d", "Delete"},
+		Control{"ESC", "Back"},
+	)
+
+	return content
+}
+
+func (v *editView) renderPasswordList(width int) string {
+	content := ui.TitleStyle.Render("Password List") + "\n\n"
+
+	if len(v.passwords) == 0 {
+		content += ui.DescriptionStyle.Render("No passwords available. Press 'p' to add a new password.") + "\n"
+	} else {
+		listWidth := width - 4
+		for i, pass := range v.passwords {
+			prefix := "  "
+			if i == v.selectedItemIndex {
+				prefix = "> "
+				line := fmt.Sprintf("%s%-*s",
+					prefix,
+					listWidth-len(prefix),
+					pass.Description)
+				content += ui.SelectedItemStyle.Render(line) + "\n"
+			} else {
+				line := fmt.Sprintf("%s%-*s",
+					prefix,
+					listWidth-len(prefix),
+					pass.Description)
+				content += line + "\n"
+			}
+		}
+	}
+
+	content += "\n" + v.renderControls(
+		Control{"e", "Edit"},
+		Control{"d", "Delete"},
+		Control{"ESC", "Back"},
+	)
+
+	return content
+}
+
+func (v *editView) renderPasswordEdit(width int) string {
+	title := "Add New Password"
+	if v.currentPassword != nil {
+		title = "Edit Password"
+	}
+
+	content := ui.TitleStyle.Render(title) + "\n\n"
+
+	// Zmniejszamy szerokość pola wejściowego, aby pasowało do ramki
+	inputWidth := width - 8 // Odjęcie marginesów i ramki
+
+	// Ustawienia dla pól wejściowych
+	labels := []string{
+		"Description:",
+		"Password:",
+	}
+
+	for i, input := range v.inputs[:2] {
+		content += labels[i] + "\n"
+		inputStyle := ui.InputStyle.Width(inputWidth)
+		if i == v.activeField {
+			inputStyle = ui.SelectedItemStyle.Width(inputWidth)
+		}
+		content += inputStyle.Render(input.View()) + "\n\n"
+	}
+
+	content += v.renderControls(
+		Control{"ENTER", "Save"},
+		Control{"ESC", "Cancel"},
+		Control{"↑/↓", "Navigate"},
+	)
+
+	return content
+}
+
+func (v *editView) renderHostEdit(width int) string {
+	title := "Add New Host"
+	if v.currentHost != nil {
+		title = "Edit Host"
+	}
+
+	content := ui.TitleStyle.Render(title) + "\n\n"
+
+	// Zmniejszamy szerokość pola wejściowego
+	inputWidth := width - 8 // Odjęcie marginesów i ramki
+
+	labels := []string{
+		"Host Name:",
+		"Description:",
+		"Login:",
+		"IP/Host:",
+		"Port:",
+	}
+
+	for i, input := range v.inputs[:5] {
+		content += labels[i] + "\n"
+		inputStyle := ui.InputStyle.Width(inputWidth)
+		if i == v.activeField {
+			inputStyle = ui.SelectedItemStyle.Width(inputWidth)
+		}
+		content += inputStyle.Render(input.View()) + "\n\n"
+	}
+
+	content += v.renderControls(
+		Control{"ENTER", "Save"},
+		Control{"ESC", "Cancel"},
+		Control{"↑/↓", "Navigate"},
+	)
+
+	return content
+}
+
+func (v *editView) renderMainMenu(width int) string {
 	content := ui.TitleStyle.Render("Edit Mode") + "\n\n"
 
 	menuItems := []struct {
@@ -267,11 +321,13 @@ func (v *editView) renderMainMenu() string {
 		{"ESC", "Back"},
 	}
 
+	menuWidth := width - 4
 	for _, item := range menuItems {
-		content += fmt.Sprintf("%s - %s\n",
-			ui.ButtonStyle.Render(item.key),
-			item.description,
-		)
+		line := fmt.Sprintf("%-*s", menuWidth,
+			fmt.Sprintf("%s - %s",
+				ui.ButtonStyle.Render(item.key),
+				item.description))
+		content += line + "\n"
 	}
 
 	return content
@@ -299,6 +355,10 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		v.width = msg.Width
+		v.height = msg.Height
+		return v, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":

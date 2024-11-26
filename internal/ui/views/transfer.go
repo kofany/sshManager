@@ -72,9 +72,10 @@ type transferView struct {
 	progress      ssh.TransferProgress
 	showHelp      bool
 	input         textinput.Model
-	mutex         sync.Mutex // Dodajemy mutex do bezpiecznej akt      fU[ualizacji stanu
+	mutex         sync.Mutex
+	width         int // Dodane
+	height        int // Dodane
 }
-
 type connectionStatusMsg struct {
 	connected bool
 	err       error
@@ -101,7 +102,9 @@ func NewTransferView(model *ui.Model) *transferView {
 				{name: "..", isDir: true},
 			},
 		},
-		input: input,
+		input:  input,
+		width:  model.GetTerminalWidth(),  // Dodane
+		height: model.GetTerminalHeight(), // Dodane
 	}
 
 	// Inicjalizujemy panel lokalny
@@ -288,11 +291,14 @@ func (v *transferView) switchActivePanel() {
 func (v *transferView) renderPanel(p *Panel) string {
 	var content strings.Builder
 
+	// Oblicz szerokość panelu na podstawie szerokości ekranu
+	panelWidth := (min(v.width-40, 160) - 3) / 2 // Dostosowujemy do nowej całkowitej szerokości
+
 	// Zastosuj styl panelu z ramką
 	var panelContent strings.Builder
 
 	// Formatowanie i skracanie ścieżki
-	pathText := formatPath(p.path, 40)
+	pathText := formatPath(p.path, min(40, panelWidth-5))
 
 	// Użycie stylów ścieżki
 	pathStyle := inactivePathStyle
@@ -302,9 +308,17 @@ func (v *transferView) renderPanel(p *Panel) string {
 	panelContent.WriteString(pathStyle.Render(pathText))
 	panelContent.WriteString("\n")
 
+	// Dostosuj szerokości kolumn do dostępnej przestrzeni
+	nameWidth := min(30, panelWidth-35) // Zostaw miejsce na size i modified
+	sizeWidth := 10
+	modifiedWidth := 20
+
 	// Nagłówki kolumn
 	panelContent.WriteString(ui.HeaderStyle.Render(
-		fmt.Sprintf("%-30s %10s %20s", "Name", "Size", "Modified"),
+		fmt.Sprintf("%-*s %*s %*s",
+			nameWidth, "Name",
+			sizeWidth, "Size",
+			modifiedWidth, "Modified"),
 	))
 	panelContent.WriteString("\n")
 
@@ -315,7 +329,7 @@ func (v *transferView) renderPanel(p *Panel) string {
 			p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
 			p.selectedIndex-p.scrollOffset,
 			p.active,
-			60, // szerokość listy plików
+			panelWidth-2, // szerokość listy plików z uwzględnieniem marginesów
 		)
 		panelContent.WriteString(filesList)
 
@@ -333,10 +347,125 @@ func (v *transferView) renderPanel(p *Panel) string {
 
 	// Zastosuj styl całego panelu
 	content.WriteString(panelStyle.
+		Width(panelWidth).
 		BorderForeground(ui.Subtle).
 		Render(panelContent.String()))
 
 	return content.String()
+}
+
+func (v *transferView) View() string {
+	var content strings.Builder
+
+	// Tytuł i status połączenia
+	titleContent := ui.TitleStyle.Render("File Transfer")
+	if v.connected {
+		if host := v.model.GetSelectedHost(); host != nil {
+			titleContent += ui.SuccessStyle.Render(
+				fmt.Sprintf(" - Connected to %s (%s)", host.Name, host.IP),
+			)
+		}
+	} else if host := v.model.GetSelectedHost(); host != nil {
+		if v.connecting {
+			titleContent += ui.DescriptionStyle.Render(" - Establishing connection...")
+		} else {
+			titleContent += ui.ErrorStyle.Render(
+				fmt.Sprintf(" - Not connected to %s (%s)", host.Name, host.IP),
+			)
+		}
+	}
+	content.WriteString(titleContent + "\n\n")
+
+	// Obsługa stanu łączenia
+	if v.connecting {
+		connectingContent := ui.DescriptionStyle.Render("Establishing SFTP connection...")
+		return lipgloss.Place(
+			v.width,
+			v.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			ui.WindowStyle.Render(connectingContent),
+		)
+	}
+
+	// Obsługa widoku pomocy
+	if v.showHelp {
+		helpContent := ui.DescriptionStyle.Render(helpText)
+		return lipgloss.Place(
+			v.width,
+			v.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			ui.WindowStyle.Render(helpContent),
+		)
+	}
+
+	// Oblicz szerokość paneli na podstawie szerokości ekranu
+	totalWidth := min(v.width-40, 160) // Zmniejszamy szerokość o marginesy (20 z każdej strony)
+	panelWidth := (totalWidth - 3) / 2 // 3 to szerokość separatora
+
+	// Renderuj panele
+	leftPanel := v.renderPanel(&v.localPanel)
+	rightPanel := ""
+
+	if !v.connected {
+		rightPanel = ui.ErrorStyle.Render("\n  No SFTP Connection\n  Press 'q' to return and connect to a host first.")
+	} else {
+		rightPanel = v.renderPanel(&v.remotePanel)
+	}
+
+	// Wyrównaj panele
+	leftLines := strings.Split(leftPanel, "\n")
+	rightLines := strings.Split(rightPanel, "\n")
+
+	maxLines := max(len(leftLines), len(rightLines))
+
+	// Wyrównaj liczbe linii w panelach
+	for i := len(leftLines); i < maxLines; i++ {
+		leftLines = append(leftLines, strings.Repeat(" ", panelWidth))
+	}
+	for i := len(rightLines); i < maxLines; i++ {
+		rightLines = append(rightLines, strings.Repeat(" ", panelWidth))
+	}
+
+	// Połącz panele
+	for i := 0; i < maxLines; i++ {
+		content.WriteString(leftLines[i])
+		content.WriteString("   ") // Separator
+		content.WriteString(rightLines[i])
+		content.WriteString("\n")
+	}
+
+	// Pasek postępu
+	if v.transferring {
+		content.WriteString("\n")
+		progressBar := v.formatProgressBar(totalWidth)
+		content.WriteString(ui.DescriptionStyle.Render(progressBar))
+	}
+	footer := v.renderFooter()
+	content.WriteString("\n")
+	content.WriteString(footer)
+
+	// Renderuj całość w oknie i wycentruj
+	finalContent := ui.WindowStyle.Render(content.String())
+
+	return lipgloss.Place(
+		v.width,
+		v.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		finalContent,
+		lipgloss.WithWhitespaceChars(""),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+	)
+}
+
+// Pomocnicza funkcja do określania maksimum
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // Pomocnicza funkcja min
@@ -628,6 +757,12 @@ func (v *transferView) handleError(err error) {
 
 func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		v.mutex.Lock()
+		v.width = msg.Width
+		v.height = msg.Height
+		v.mutex.Unlock()
+		return v, nil
 	case transferProgressMsg:
 		v.mutex.Lock()
 		v.progress = ssh.TransferProgress(msg)
@@ -868,124 +1003,6 @@ var helpText = `
  Down/j    - Move down
  `
 
-func (v *transferView) View() string {
-	var content strings.Builder
-
-	content.WriteString(ui.TitleStyle.Render("File Transfer"))
-	if v.connected {
-		if host := v.model.GetSelectedHost(); host != nil {
-			content.WriteString(ui.SuccessStyle.Render(
-				fmt.Sprintf(" - Connected to %s (%s)", host.Name, host.IP),
-			))
-		}
-	} else if host := v.model.GetSelectedHost(); host != nil {
-		if v.connecting {
-			content.WriteString(ui.DescriptionStyle.Render(" - Establishing connection..."))
-		} else {
-			content.WriteString(ui.ErrorStyle.Render(
-				fmt.Sprintf(" - Not connected to %s (%s)", host.Name, host.IP),
-			))
-		}
-	}
-	content.WriteString("\n\n")
-
-	if v.connecting {
-		content.WriteString(ui.DescriptionStyle.Render("Establishing SFTP connection..."))
-		return ui.WindowStyle.Render(content.String())
-	}
-
-	// Pomoc (jeśli włączona)
-	if v.showHelp {
-		content.WriteString(ui.DescriptionStyle.Render(helpText))
-		return ui.WindowStyle.Render(content.String())
-	}
-	// Oblicz szerokość paneli
-	totalWidth := 120                  // Zwiększamy całkowitą szerokość
-	panelWidth := (totalWidth - 3) / 2 // 3 to szerokość separatora
-
-	// Renderuj panele w jednej linii
-	leftPanel := v.renderPanel(&v.localPanel)
-	rightPanel := ""
-
-	if !v.connected {
-		rightPanel = ui.ErrorStyle.Render("\n  No SFTP Connection\n  Press 'q' to return and connect to a host first.")
-	} else {
-		rightPanel = v.renderPanel(&v.remotePanel)
-	}
-
-	// Użyj strings.Split aby podzielić panele na linie
-	leftLines := strings.Split(leftPanel, "\n")
-	rightLines := strings.Split(rightPanel, "\n")
-
-	// Wyrównaj liczbę linii w obu panelach
-	maxLines := len(leftLines)
-	if len(rightLines) > maxLines {
-		maxLines = len(rightLines)
-	}
-	for i := len(leftLines); i < maxLines; i++ {
-		leftLines = append(leftLines, strings.Repeat(" ", panelWidth))
-	}
-	for i := len(rightLines); i < maxLines; i++ {
-		rightLines = append(rightLines, strings.Repeat(" ", panelWidth))
-	}
-
-	// Połącz linie paneli ze sobą
-	for i := 0; i < maxLines; i++ {
-		content.WriteString(leftLines[i])
-		content.WriteString("   ") // Separator
-		content.WriteString(rightLines[i])
-		content.WriteString("\n")
-	}
-
-	// Pasek postępu (jeśli trwa transfer)
-	if v.transferring {
-		content.WriteString("\n")
-		progressBar := v.formatProgressBar(totalWidth)
-		content.WriteString(ui.DescriptionStyle.Render(progressBar))
-	}
-
-	// Status i komunikaty
-	footerContent := strings.Builder{}
-
-	// Komunikat o błędzie
-	if v.errorMessage != "" {
-		footerContent.WriteString(ui.ErrorStyle.Render("Error: " + v.errorMessage))
-		footerContent.WriteString("\n")
-	}
-
-	// Status
-	if v.statusMessage != "" {
-		style := ui.DescriptionStyle
-		if v.shouldShowDeleteConfirm() {
-			style = ui.ErrorStyle
-		} else if v.isWaitingForInput() {
-			style = ui.InputStyle
-		}
-		footerContent.WriteString(style.Render(v.statusMessage))
-		footerContent.WriteString("\n")
-	}
-
-	// Komunikat o braku połączenia (jeśli nie połączono)
-	if !v.connected && v.errorMessage == "" {
-		footerContent.WriteString(ui.ErrorStyle.Render("SFTP connection not established. Press 'q' to return to main menu and connect first."))
-		footerContent.WriteString("\n")
-	}
-
-	// Skróty klawiszowe (pokazuj tylko aktywne w zależności od stanu połączenia)
-	if v.connected {
-		footerContent.WriteString(v.renderShortcuts())
-	} else {
-		footerContent.WriteString(ui.ButtonStyle.Render("q") + " - Return to main menu")
-	}
-
-	// Dodaj stopkę do głównej zawartości
-	content.WriteString("\n")
-	content.WriteString(footerContent.String())
-
-	// Renderuj całość w oknie
-	return ui.WindowStyle.Render(content.String())
-}
-
 // renderShortcuts renderuje pasek skrótów
 func (v *transferView) renderShortcuts() string {
 	shortcuts := []struct {
@@ -1152,10 +1169,6 @@ func (v *transferView) sendConnectionUpdate() tea.Cmd {
 	}
 }
 
-// internal/ui/views/transfer.go
-
-// internal/ui/views/transfer.go
-
 func (v *transferView) startTransferCmd(srcPath string, dstPath string, transfer *ssh.FileTransfer, upload bool) tea.Cmd {
 	return func() tea.Msg {
 		progressChan := make(chan ssh.TransferProgress)
@@ -1186,4 +1199,42 @@ func (v *transferView) startTransferCmd(srcPath string, dstPath string, transfer
 
 		return nil
 	}
+}
+
+func (v *transferView) renderFooter() string {
+	var footerContent strings.Builder
+
+	// Komunikat o błędzie
+	if v.errorMessage != "" {
+		footerContent.WriteString(ui.ErrorStyle.Render("Error: " + v.errorMessage))
+		footerContent.WriteString("\n")
+	}
+
+	// Status
+	if v.statusMessage != "" {
+		style := ui.DescriptionStyle
+		if v.shouldShowDeleteConfirm() {
+			style = ui.ErrorStyle
+		} else if v.isWaitingForInput() {
+			style = ui.InputStyle
+		}
+		footerContent.WriteString(style.Render(v.statusMessage))
+		footerContent.WriteString("\n")
+	}
+
+	// Komunikat o braku połączenia
+	if !v.connected && v.errorMessage == "" {
+		footerContent.WriteString(ui.ErrorStyle.Render(
+			"SFTP connection not established. Press 'q' to return to main menu and connect first."))
+		footerContent.WriteString("\n")
+	}
+
+	// Skróty klawiszowe
+	if v.connected {
+		footerContent.WriteString(v.renderShortcuts())
+	} else {
+		footerContent.WriteString(ui.ButtonStyle.Render("q") + " - Return to main menu")
+	}
+
+	return footerContent.String()
 }

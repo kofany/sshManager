@@ -42,6 +42,9 @@ var (
 	Infotext = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF3A99"))
 
+	HostStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#2DAFFF"))
+
 	LabelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A6ADC8")) // Subtelny szary dla etykiet
 	// Pola wejściowe
@@ -50,7 +53,38 @@ var (
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(Highlight).
 			Padding(0, 1)
+	// Dodatkowe style dla statusów
+	StatusConnectingStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#7DC4E4")). // Jasny niebieski jak Highlight
+				Bold(true)
 
+	StatusConnectedStyle = lipgloss.NewStyle().
+				Foreground(Special). // Pomarańczowy jak dla przycisków
+				Bold(true)
+
+	StatusDefaultStyle = lipgloss.NewStyle().
+				Foreground(Subtle)
+
+	StatusStyle = lipgloss.NewStyle().
+			Foreground(StatusBar)
+
+	// Style dla paneli
+	PanelTitleStyle = lipgloss.NewStyle().
+			Foreground(Highlight).
+			Bold(true).
+			Padding(0, 1)
+
+	// Style dla wyłączonych elementów
+	ButtonDisabledStyle = lipgloss.NewStyle().
+				Foreground(Subtle).
+				Bold(true)
+
+	DescriptionDisabledStyle = lipgloss.NewStyle().
+					Foreground(Subtle).
+					MarginLeft(2)
+
+	// Zmiana nazwy Infotext na InfotextStyle dla spójności
+	InfotextStyle = Infotext
 	// Przyciski
 	ButtonStyle = lipgloss.NewStyle().
 			Foreground(Special).

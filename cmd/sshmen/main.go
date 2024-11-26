@@ -1,5 +1,3 @@
-// cmd/sshmen/main.go
-
 package main
 
 import (
@@ -9,8 +7,8 @@ import (
 	"sshManager/internal/config"
 	"sshManager/internal/crypto"
 	"sshManager/internal/ui"
+	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
-	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -29,19 +27,33 @@ type programModel struct {
 	quitting    bool
 	uiModel     *ui.Model
 	currentView tea.Model
+	cipher      *crypto.Cipher
 }
 
 func initialModel() *programModel {
 	uiModel := ui.NewModel()
-	mainView := views.NewMainView(uiModel)
+
+	// Pobranie ścieżki do pliku konfiguracyjnego
+	configPath, err := config.GetDefaultConfigPath()
+	if err != nil {
+		fmt.Printf("Warning: Could not determine config path: %v\n", err)
+		configPath = config.DefaultConfigFileName
+	}
+
+	// Inicjalizacja widoku początkowego
+	initialPrompt := views.NewInitialPromptModel(configPath)
+
+	// Ustaw domyślny rozmiar terminala
+	if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+		uiModel.SetTerminalSize(w, h)
+	}
 
 	return &programModel{
 		mode:        modeConnect,
 		uiModel:     uiModel,
-		currentView: mainView,
+		currentView: initialPrompt,
 	}
 }
-
 func (m *programModel) Init() tea.Cmd {
 	return m.currentView.Init()
 }
@@ -53,6 +65,11 @@ func (m *programModel) SetProgram(p *tea.Program) {
 }
 
 func (m *programModel) updateCurrentView() {
+	if m.cipher == nil {
+		// Wciąż jesteśmy w widoku początkowym
+		return
+	}
+
 	switch m.uiModel.GetActiveView() {
 	case ui.ViewMain:
 		m.currentView = views.NewMainView(m.uiModel)
@@ -60,6 +77,10 @@ func (m *programModel) updateCurrentView() {
 		m.currentView = views.NewEditView(m.uiModel)
 	case ui.ViewTransfer:
 		m.currentView = views.NewTransferView(m.uiModel)
+	default:
+		// Domyślnie ustaw widok główny
+		m.currentView = views.NewMainView(m.uiModel)
+		m.uiModel.SetActiveView(ui.ViewMain)
 	}
 }
 
@@ -69,19 +90,37 @@ func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Zapisz aktualny widok
-	currentActiveView := m.uiModel.GetActiveView()
+	switch msg := msg.(type) {
+	case messages.PasswordEnteredMsg:
+		// Inicjalizacja szyfru
+		key := crypto.GenerateKeyFromPassword(string(msg))
+		m.cipher = crypto.NewCipher(string(key))
+		m.uiModel.SetCipher(m.cipher)
 
-	// Aktualizuj obecny widok
-	var cmd tea.Cmd
-	m.currentView, cmd = m.currentView.Update(msg)
-
-	// Sprawdź czy zmienił się aktywny widok
-	if currentActiveView != m.uiModel.GetActiveView() {
+		// Przełączenie na główny widok
 		m.updateCurrentView()
-	}
 
-	return m, cmd
+		// Inicjalizacja nowego widoku
+		initCmd := m.currentView.Init()
+
+		// Zwracamy model i komendę inicjalizującą
+		return m, initCmd
+
+	default:
+		// Zapisz aktualny widok
+		currentActiveView := m.uiModel.GetActiveView()
+
+		// Aktualizuj obecny widok
+		var cmd tea.Cmd
+		m.currentView, cmd = m.currentView.Update(msg)
+
+		// Sprawdź czy zmienił się aktywny widok
+		if currentActiveView != m.uiModel.GetActiveView() {
+			m.updateCurrentView()
+		}
+
+		return m, cmd
+	}
 }
 
 func (m *programModel) View() string {
@@ -97,40 +136,16 @@ func main() {
 	transferMode := flag.Bool("file-transfer", false, "File transfer mode")
 	flag.Parse()
 
-	// Pokaż informację o lokalizacji pliku konfiguracyjnego
-	configPath, err := config.GetDefaultConfigPath()
-	if err != nil {
-		fmt.Printf("Warning: Could not determine config path: %v\n", err)
-		configPath = config.DefaultConfigFileName
-	}
-	fmt.Printf("Using config file: %s\n", configPath)
-
-	// Wczytanie klucza szyfrowania
-	fmt.Print("Enter encryption key: ")
-	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		fmt.Printf("Error reading encryption key: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println()
-
-	// Inicjalizacja szyfru
-	key := crypto.GenerateKeyFromPassword(string(bytePassword))
-	cipher := crypto.NewCipher(string(key))
-
-	// Inicjalizacja modelu UI
+	// Inicjalizacja modelu programu
 	m := initialModel()
-	m.uiModel.SetCipher(cipher)
 
 	// Ustawienie początkowego widoku na podstawie flag
 	if *editMode {
 		m.mode = modeEdit
 		m.uiModel.SetActiveView(ui.ViewEdit)
-		m.updateCurrentView()
 	} else if *transferMode {
 		m.mode = modeTransfer
 		m.uiModel.SetActiveView(ui.ViewTransfer)
-		m.updateCurrentView()
 	}
 
 	// Uruchomienie programu
