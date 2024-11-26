@@ -336,7 +336,7 @@ func (v *transferView) renderPanel(p *Panel) string {
 	// Sprawdź czy entries nie jest nil i czy ma elementy
 	if len(p.entries) > 0 {
 		// Lista plików
-		filesList := renderFileList(
+		filesList := v.renderFileList(
 			p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
 			p.selectedIndex-p.scrollOffset,
 			p.active,
@@ -442,7 +442,7 @@ func (v *transferView) View() string {
 	// Połącz panele
 	for i := 0; i < maxLines; i++ {
 		content.WriteString(leftLines[i])
-		content.WriteString("   ") // Separator
+		content.WriteString(" │ ")
 		content.WriteString(rightLines[i])
 		content.WriteString("\n")
 	}
@@ -906,6 +906,19 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
+		case "s":
+			if !v.transferring {
+				panel := v.getActivePanel()
+				if len(panel.entries) > 0 && panel.selectedIndex < len(panel.entries) {
+					entry := panel.entries[panel.selectedIndex]
+					path := filepath.Join(panel.path, entry.name)
+					if entry.name != ".." { // Nie pozwalamy na zaznaczenie ".."
+						v.model.ToggleSelection(path)
+					}
+				}
+			}
+			return v, nil
+
 		case "y":
 			// Potwierdzenie usunięcia
 			if strings.HasPrefix(v.statusMessage, "Delete ") {
@@ -1033,6 +1046,7 @@ func (v *transferView) renderShortcuts() string {
 		disabled    bool
 	}{
 		{"Tab", "Switch panel", !v.connected},
+		{"s", "Select", v.transferring}, // Dodany nowy skrót
 		{"F5/c", "Copy", v.transferring},
 		{"F6/r", "Rename", v.transferring},
 		{"F7/m", "MkDir", v.transferring},
@@ -1173,85 +1187,93 @@ func getFileType(entry FileEntry) string {
 	return "default"
 }
 
-func renderFileList(entries []FileEntry, selected int, active bool, width int) string {
+func (v *transferView) renderFileList(entries []FileEntry, selected int, active bool, width int) string {
 	var content strings.Builder
 
 	if len(entries) == 0 {
 		return ""
 	}
 
+	// Obliczanie szerokości kolumn na podstawie dostępnej szerokości
+	nameWidth := width - 35 // Szerokość kolumny z nazwą
+	sizeWidth := 10         // Stała szerokość kolumny rozmiaru
+
 	for i, entry := range entries {
 		isSelected := i == selected && selected >= 0 && selected < len(entries)
+		path := filepath.Join(v.getActivePanel().path, entry.name)
+		isMarked := v.model.IsSelected(path)
 
-		// Formatowanie nazwy pliku z odpowiednim stylem
-		var styledName string
-		fileType := getFileType(entry)
-
-		name := entry.name
+		// Przygotowanie nazwy pliku
+		baseName := entry.name
 		if entry.isDir {
-			name = "[" + name + "]"
+			baseName = "[" + baseName + "]"
 		}
 
-		// Wybór stylu na podstawie typu pliku
-		switch fileType {
-		case "directory":
-			styledName = ui.DirectoryStyle.Render(name)
-		case "executable":
-			styledName = ui.ExecutableStyle.Render(name)
-		case "archive":
-			styledName = ui.ArchiveStyle.Render(name)
-		case "image":
-			styledName = ui.ImageStyle.Render(name)
-		case "document":
-			styledName = ui.DocumentStyle.Render(name)
-		case "code_c":
-			styledName = ui.CodeCStyle.Render(name)
-		case "code_h":
-			styledName = ui.CodeHStyle.Render(name)
-		case "code_go":
-			styledName = ui.CodeGoStyle.Render(name)
-		case "code_py":
-			styledName = ui.CodePyStyle.Render(name)
-		case "code_js":
-			styledName = ui.CodeJsStyle.Render(name)
-		case "code_json":
-			styledName = ui.CodeJsonStyle.Render(name)
-		default:
-			// Obsługa dla innych plików kodu
-			if strings.HasPrefix(fileType, "code_") {
-				styledName = ui.CodeDefaultStyle.Render(name)
+		// Dodanie prefiksu dla zaznaczonych elementów
+		prefix := "  "
+		if isMarked {
+			prefix = "* "
+		}
+		displayName := prefix + baseName
+
+		// Utworzenie stylu
+		mainStyle := lipgloss.NewStyle()
+		if isSelected && active {
+			mainStyle = mainStyle.Bold(true).Background(ui.Highlight).Foreground(lipgloss.Color("0"))
+		} else if isSelected {
+			mainStyle = mainStyle.Underline(false)
+		} else {
+			if entry.isDir {
+				if active {
+					mainStyle = mainStyle.Inherit(ui.DirectoryStyle)
+				} else {
+					mainStyle = mainStyle.Foreground(ui.Subtle)
+				}
 			} else {
-				styledName = ui.DefaultFileStyle.Render(name)
+				switch getFileType(entry) {
+				case "executable":
+					mainStyle = mainStyle.Inherit(ui.ExecutableStyle)
+				case "archive":
+					mainStyle = mainStyle.Inherit(ui.ArchiveStyle)
+				case "image":
+					mainStyle = mainStyle.Inherit(ui.ImageStyle)
+				case "document":
+					mainStyle = mainStyle.Inherit(ui.DocumentStyle)
+				case "code_c":
+					mainStyle = mainStyle.Inherit(ui.CodeCStyle)
+				case "code_h":
+					mainStyle = mainStyle.Inherit(ui.CodeHStyle)
+				case "code_go":
+					mainStyle = mainStyle.Inherit(ui.CodeGoStyle)
+				case "code_py":
+					mainStyle = mainStyle.Inherit(ui.CodePyStyle)
+				case "code_js":
+					mainStyle = mainStyle.Inherit(ui.CodeJsStyle)
+				case "code_json":
+					mainStyle = mainStyle.Inherit(ui.CodeJsonStyle)
+				default:
+					if strings.HasPrefix(getFileType(entry), "code_") {
+						mainStyle = mainStyle.Inherit(ui.CodeDefaultStyle)
+					} else {
+						mainStyle = mainStyle.Inherit(ui.DefaultFileStyle)
+					}
+				}
 			}
 		}
 
-		// Skróć nazwę jeśli jest za długa
-		maxNameWidth := width - 35 // miejsce na rozmiar i datę
-		if lipgloss.Width(styledName) > maxNameWidth {
-			styledName = styledName[:maxNameWidth-3] + "..."
+		// Przygotowanie elementów linii z odpowiednimi szerokościami
+		name := displayName
+		if len(name) > nameWidth {
+			name = name[:nameWidth-3] + "..."
 		}
 
-		// Formatowanie linii
-		line := fmt.Sprintf("%-*s %10s %19s",
-			maxNameWidth,
-			styledName,
-			formatSize(entry.size),
-			entry.modTime.Format("2006-01-02 15:04"))
+		// Renderowanie nazwy z użyciem stylu
+		styledName := mainStyle.Render(fmt.Sprintf("%-*s", nameWidth, name))
+		sizeStr := fmt.Sprintf("%*s", sizeWidth, formatSize(entry.size))
+		dateStr := entry.modTime.Format("2006-01-02 15:04")
 
-		// Podświetlenie zaznaczonej linii
-		if isSelected {
-			if active {
-				line = lipgloss.NewStyle().
-					Bold(true).
-					Background(ui.Highlight).
-					Foreground(lipgloss.Color("0")).
-					Render(line)
-			} else {
-				line = lipgloss.NewStyle().
-					Underline(true).
-					Render(line)
-			}
-		}
+		// Złożenie całej linii
+		line := fmt.Sprintf("%s %s %19s", styledName, sizeStr, dateStr)
 
 		content.WriteString(line)
 		content.WriteString("\n")

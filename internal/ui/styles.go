@@ -195,6 +195,8 @@ var (
 	DefaultFileStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#A9A9A9")) // DarkGray dla pozostałych plików
 
+	SelectedFileStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FF00BD")) // DarkGray dla pozostałych plików
 )
 
 // GetMaxWidth zwraca maksymalną szerokość tekstu w slice'u

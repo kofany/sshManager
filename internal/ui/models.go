@@ -112,6 +112,8 @@ type Model struct {
 	Program        *tea.Program // Zmiana z małej litery na wielką
 	terminalWidth  int
 	terminalHeight int
+	selectedItems  map[string]bool // mapa przechowująca zaznaczone elementy (klucz: ścieżka pliku)
+
 }
 
 // Init implementuje tea.Model
@@ -242,6 +244,7 @@ func NewModel() *Model {
 	m.hosts = configManager.GetHosts()
 	m.passwords = configManager.GetPasswords()
 	m.UpdateLists()
+	m.selectedItems = make(map[string]bool)
 
 	return &m // Zwracamy wskaźnik do m
 }
@@ -581,4 +584,22 @@ func (m *Model) GetTerminalHeight() int {
 func (m *Model) UpdateWindowSize(width, height int) {
 	m.terminalWidth = width
 	m.terminalHeight = height
+}
+
+func (m *Model) ToggleSelection(path string) {
+	if m.selectedItems == nil {
+		m.selectedItems = make(map[string]bool)
+	}
+	m.selectedItems[path] = !m.selectedItems[path]
+}
+
+func (m *Model) IsSelected(path string) bool {
+	if m.selectedItems == nil {
+		return false
+	}
+	return m.selectedItems[path]
+}
+
+func (m *Model) ClearSelection() {
+	m.selectedItems = make(map[string]bool)
 }
