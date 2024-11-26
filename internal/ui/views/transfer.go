@@ -42,6 +42,8 @@ type FileEntry struct {
 	size    int64
 	modTime time.Time
 	isDir   bool
+	mode    os.FileMode // Dodane pole
+
 }
 
 // Panel reprezentuje panel plików (lokalny lub zdalny)
@@ -190,6 +192,8 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 				size:    fi.Size(),
 				modTime: fi.ModTime(),
 				isDir:   fi.IsDir(),
+				mode:    fi.Mode(), // Dodane
+
 			})
 		}
 	}
@@ -256,6 +260,7 @@ func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 				size:    fi.Size(),
 				modTime: fi.ModTime(),
 				isDir:   fi.IsDir(),
+				mode:    fi.Mode(), // Dodane
 			})
 		}
 	}
@@ -803,6 +808,18 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return v, nil
 	case tea.KeyMsg:
+		// Najpierw obsłużmy wyjście z pomocy jeśli jest aktywna
+		if v.showHelp {
+			switch msg.String() {
+			case "esc", "q", "f1":
+				v.showHelp = false
+				return v, nil
+			default:
+				return v, nil // Ignoruj inne klawisze w trybie pomocy
+			}
+		}
+
+		// Obsługa wejścia użytkownika, jeśli czekamy na input
 		if v.isWaitingForInput() {
 			if msg.Type == tea.KeyEnter {
 				if err := v.handleCommand(v.input.Value()); err != nil {
@@ -815,6 +832,8 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.input, cmd = v.input.Update(msg)
 			return v, cmd
 		}
+
+		// Reszta obsługi klawiszy
 		switch msg.String() {
 		case "q", "esc":
 			if v.transferring {
@@ -919,6 +938,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return v, nil
+
 		case "ctrl+n":
 			if !v.transferring {
 				name := "New Directory" // To powinno być pobierane z inputu
@@ -1006,7 +1026,6 @@ var helpText = `
  Down/j    - Move down
  `
 
-// renderShortcuts renderuje pasek skrótów
 func (v *transferView) renderShortcuts() string {
 	shortcuts := []struct {
 		key         string
@@ -1022,12 +1041,20 @@ func (v *transferView) renderShortcuts() string {
 		{"Esc", "Exit", false},
 	}
 
+	// Oblicz maksymalną szerokość dla klawiszy i opisów
+	maxKeyWidth := 0
+	maxDescWidth := 0
+	for _, sc := range shortcuts {
+		if len(sc.key) > maxKeyWidth {
+			maxKeyWidth = len(sc.key)
+		}
+		if len(sc.description) > maxDescWidth {
+			maxDescWidth = len(sc.description)
+		}
+	}
+
 	var result strings.Builder
 	for i, sc := range shortcuts {
-		if i > 0 {
-			result.WriteString(" ")
-		}
-
 		keyStyle := ui.ButtonStyle
 		descStyle := ui.DescriptionStyle
 		if sc.disabled {
@@ -1035,8 +1062,17 @@ func (v *transferView) renderShortcuts() string {
 			descStyle = descStyle.Foreground(ui.Subtle)
 		}
 
-		result.WriteString(keyStyle.Render(sc.key))
-		result.WriteString(descStyle.Render(fmt.Sprintf(":%s", sc.description)))
+		// Wyrównaj klawisz do prawej, a opis do lewej w kolumnie
+		cell := fmt.Sprintf("%*s → %-*s",
+			maxKeyWidth, keyStyle.Render(sc.key),
+			maxDescWidth, descStyle.Render(sc.description))
+
+		// Dodaj separator między kolumnami, oprócz ostatniej
+		if i < len(shortcuts)-1 {
+			cell += " ║ "
+		}
+
+		result.WriteString(cell)
 	}
 
 	return result.String()
@@ -1080,49 +1116,144 @@ func formatPath(path string, maxWidth int) string {
 	return "..." + path[len(path)-(maxWidth-3):]
 }
 
-// renderFileList renderuje listę plików z odpowiednim formatowaniem
+func getFileType(entry FileEntry) string {
+	if entry.isDir {
+		return "directory"
+	}
+
+	// Określenie typu na podstawie rozszerzenia
+	ext := strings.ToLower(filepath.Ext(entry.name))
+
+	// Archiwa
+	switch ext {
+	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
+		return "archive"
+	}
+
+	// Obrazy
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp":
+		return "image"
+	}
+
+	// Dokumenty
+	switch ext {
+	case ".txt", ".doc", ".docx", ".pdf", ".md", ".csv", ".xlsx", ".odt":
+		return "document"
+	}
+
+	// Pliki wykonywalne
+	switch ext {
+	case ".exe", ".sh", ".bat", ".cmd", ".com", ".app":
+		return "executable"
+	}
+
+	// Pliki kodu
+	switch ext {
+	case ".c":
+		return "code_c"
+	case ".h":
+		return "code_h"
+	case ".go":
+		return "code_go"
+	case ".py":
+		return "code_py"
+	case ".js":
+		return "code_js"
+	case ".json":
+		return "code_json"
+		// Możesz dodać więcej rozszerzeń dla innych języków programowania tutaj
+	}
+
+	// Jeśli plik ma ustawione prawa wykonywania
+	if entry.mode&0111 != 0 {
+		return "executable"
+	}
+
+	return "default"
+}
+
 func renderFileList(entries []FileEntry, selected int, active bool, width int) string {
 	var content strings.Builder
 
-	// Zabezpieczenie przed pustą listą
 	if len(entries) == 0 {
 		return ""
 	}
 
 	for i, entry := range entries {
-		// Sprawdź czy selected jest w prawidłowym zakresie
 		isSelected := i == selected && selected >= 0 && selected < len(entries)
 
-		// Formatowanie nazwy pliku
+		// Formatowanie nazwy pliku z odpowiednim stylem
+		var styledName string
+		fileType := getFileType(entry)
+
 		name := entry.name
 		if entry.isDir {
 			name = "[" + name + "]"
 		}
 
+		// Wybór stylu na podstawie typu pliku
+		switch fileType {
+		case "directory":
+			styledName = ui.DirectoryStyle.Render(name)
+		case "executable":
+			styledName = ui.ExecutableStyle.Render(name)
+		case "archive":
+			styledName = ui.ArchiveStyle.Render(name)
+		case "image":
+			styledName = ui.ImageStyle.Render(name)
+		case "document":
+			styledName = ui.DocumentStyle.Render(name)
+		case "code_c":
+			styledName = ui.CodeCStyle.Render(name)
+		case "code_h":
+			styledName = ui.CodeHStyle.Render(name)
+		case "code_go":
+			styledName = ui.CodeGoStyle.Render(name)
+		case "code_py":
+			styledName = ui.CodePyStyle.Render(name)
+		case "code_js":
+			styledName = ui.CodeJsStyle.Render(name)
+		case "code_json":
+			styledName = ui.CodeJsonStyle.Render(name)
+		default:
+			// Obsługa dla innych plików kodu
+			if strings.HasPrefix(fileType, "code_") {
+				styledName = ui.CodeDefaultStyle.Render(name)
+			} else {
+				styledName = ui.DefaultFileStyle.Render(name)
+			}
+		}
+
 		// Skróć nazwę jeśli jest za długa
 		maxNameWidth := width - 35 // miejsce na rozmiar i datę
-		if len(name) > maxNameWidth {
-			name = name[:maxNameWidth-3] + "..."
+		if lipgloss.Width(styledName) > maxNameWidth {
+			styledName = styledName[:maxNameWidth-3] + "..."
 		}
 
 		// Formatowanie linii
 		line := fmt.Sprintf("%-*s %10s %19s",
 			maxNameWidth,
-			name,
+			styledName,
 			formatSize(entry.size),
 			entry.modTime.Format("2006-01-02 15:04"))
 
-		// Styl linii
-		style := lipgloss.NewStyle()
+		// Podświetlenie zaznaczonej linii
 		if isSelected {
 			if active {
-				style = style.Bold(true).Background(ui.Highlight).Foreground(lipgloss.Color("0"))
+				line = lipgloss.NewStyle().
+					Bold(true).
+					Background(ui.Highlight).
+					Foreground(lipgloss.Color("0")).
+					Render(line)
 			} else {
-				style = style.Underline(true)
+				line = lipgloss.NewStyle().
+					Underline(true).
+					Render(line)
 			}
 		}
 
-		content.WriteString(style.Render(line))
+		content.WriteString(line)
 		content.WriteString("\n")
 	}
 

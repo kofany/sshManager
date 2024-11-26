@@ -37,7 +37,6 @@ var (
 	DescriptionStyle = lipgloss.NewStyle().
 				Foreground(Subtle).
 				MarginLeft(2)
-		// W pakiecie styles lub ui
 
 	Infotext = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF3A99"))
@@ -154,6 +153,48 @@ var (
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderTop(true).
 			BorderForeground(Border)
+
+	// Style dla różnych typów plików
+	DirectoryStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#1E90FF")). // DodgerBlue dla katalogów
+			Bold(true)
+
+	ExecutableStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#32CD32")) // LimeGreen dla plików wykonywalnych
+
+	ArchiveStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#BA55D3")) // MediumOrchid dla archiwów
+
+	ImageStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF8C00")) // DarkOrange dla obrazów
+
+	DocumentStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFD700")) // Gold dla dokumentów
+
+	CodeCStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00CED1")) // DarkTurquoise dla plików .c
+
+	CodeHStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#4682B4")) // SteelBlue dla plików .h
+
+	CodeGoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#2E8B57")) // SeaGreen dla plików .go
+
+	CodePyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6A5ACD")) // SlateBlue dla plików .py
+
+	CodeJsStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#DAA520")) // Goldenrod dla plików .js
+
+	CodeJsonStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7FFF00")) // Chartreuse dla plików .json
+
+	CodeDefaultStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#708090")) // SlateGray dla pozostałych plików kodu
+
+	DefaultFileStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A9A9A9")) // DarkGray dla pozostałych plików
+
 )
 
 // GetMaxWidth zwraca maksymalną szerokość tekstu w slice'u
