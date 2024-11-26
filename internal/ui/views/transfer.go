@@ -580,41 +580,190 @@ func (v *transferView) enterDirectory(p *Panel) error {
 	return nil
 }
 
-// internal/ui/views/transfer.go
+func (v *transferView) hasSelectedItems() bool {
+	for _, isSelected := range v.getSelectedItems() {
+		if isSelected {
+			return true
+		}
+	}
+	return false
+}
 
-// internal/ui/views/transfer.go
+func (v *transferView) getSelectedItems() map[string]bool {
+	selected := make(map[string]bool)
+	paths := v.model.GetSelectedPaths() // zakładając, że taka metoda istnieje w Model
+	for _, path := range paths {
+		selected[path] = true
+	}
+	return selected
+}
 
 func (v *transferView) copyFile() tea.Cmd {
 	srcPanel := v.getActivePanel()
 	dstPanel := v.getInactivePanel()
 
-	if len(srcPanel.entries) == 0 || srcPanel.selectedIndex >= len(srcPanel.entries) {
-		v.handleError(fmt.Errorf("no file selected"))
-		return nil
+	// Zbierz wszystkie zaznaczone pliki i foldery
+	var itemsToCopy []struct {
+		srcPath string
+		dstPath string
+		isDir   bool
 	}
 
-	entry := srcPanel.entries[srcPanel.selectedIndex]
-	if entry.isDir {
-		v.handleError(fmt.Errorf("directory copying not supported yet"))
-		return nil
+	// Najpierw sprawdź aktualnie wybrany element, jeśli nie ma zaznaczonych
+	if !v.hasSelectedItems() {
+		if len(srcPanel.entries) == 0 || srcPanel.selectedIndex >= len(srcPanel.entries) {
+			v.handleError(fmt.Errorf("no file selected"))
+			return nil
+		}
+		entry := srcPanel.entries[srcPanel.selectedIndex]
+		srcPath := filepath.Join(srcPanel.path, entry.name)
+		dstPath := filepath.Join(dstPanel.path, entry.name)
+		itemsToCopy = append(itemsToCopy, struct {
+			srcPath string
+			dstPath string
+			isDir   bool
+		}{srcPath, dstPath, entry.isDir})
+	} else {
+		// Dodaj wszystkie zaznaczone elementy
+		for path, isSelected := range v.getSelectedItems() {
+			if isSelected {
+				baseName := filepath.Base(path)
+				dstPath := filepath.Join(dstPanel.path, baseName)
+				// Sprawdź czy to folder czy plik
+				info, err := os.Stat(path)
+				if err != nil {
+					v.handleError(fmt.Errorf("cannot access %s: %v", path, err))
+					continue
+				}
+				itemsToCopy = append(itemsToCopy, struct {
+					srcPath string
+					dstPath string
+					isDir   bool
+				}{path, dstPath, info.IsDir()})
+			}
+		}
 	}
 
-	// Przygotuj ścieżki
-	srcPath := filepath.Join(srcPanel.path, entry.name)
-	dstPath := filepath.Join(dstPanel.path, entry.name)
+	if len(itemsToCopy) == 0 {
+		v.handleError(fmt.Errorf("no items to copy"))
+		return nil
+	}
 
 	v.mutex.Lock()
 	v.transferring = true
-	v.statusMessage = fmt.Sprintf("Copying %s...", entry.name)
+	v.statusMessage = "Copying files..."
 	v.mutex.Unlock()
 
 	transfer := v.model.GetTransfer()
 
-	// Określ, czy to jest upload czy download
-	upload := srcPanel == &v.localPanel
-
 	// Zwróć komendę rozpoczynającą transfer
-	return v.startTransferCmd(srcPath, dstPath, transfer, upload)
+	return func() tea.Msg {
+		progressChan := make(chan ssh.TransferProgress)
+		doneChan := make(chan error, 1)
+
+		// Uruchom transfer w goroutine
+		go func() {
+			var totalErr error
+			for _, item := range itemsToCopy {
+				var err error
+				if item.isDir {
+					if srcPanel == &v.localPanel {
+						err = v.copyDirectoryToRemote(item.srcPath, item.dstPath, transfer, progressChan)
+					} else {
+						err = v.copyDirectoryFromRemote(item.srcPath, item.dstPath, transfer, progressChan)
+					}
+				} else {
+					if srcPanel == &v.localPanel {
+						err = transfer.UploadFile(item.srcPath, item.dstPath, progressChan)
+					} else {
+						err = transfer.DownloadFile(item.srcPath, item.dstPath, progressChan)
+					}
+				}
+				if err != nil {
+					totalErr = fmt.Errorf("error copying %s: %v", item.srcPath, err)
+					break
+				}
+			}
+			doneChan <- totalErr
+			close(progressChan)
+		}()
+
+		// Goroutine do czytania postępu i wysyłania wiadomości
+		go func() {
+			for progress := range progressChan {
+				v.model.Program.Send(transferProgressMsg(progress))
+			}
+			err := <-doneChan
+			v.model.Program.Send(transferFinishedMsg{err: err})
+			// Wyczyść zaznaczenie po zakończeniu
+			v.model.ClearSelection()
+		}()
+
+		return nil
+	}
+}
+
+// Dodaj nowe funkcje do obsługi kopiowania folderów
+func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
+	// Utwórz katalog na zdalnym serwerze
+	if err := transfer.CreateRemoteDirectory(remotePath); err != nil {
+		return fmt.Errorf("failed to create remote directory: %v", err)
+	}
+
+	// Przejdź przez wszystkie pliki w lokalnym katalogu
+	return filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Oblicz względną ścieżkę
+		relPath, err := filepath.Rel(localPath, path)
+		if err != nil {
+			return err
+		}
+
+		// Utwórz pełną ścieżkę zdalną
+		remotePathFull := filepath.Join(remotePath, relPath)
+
+		if info.IsDir() {
+			// Utwórz katalog na zdalnym serwerze
+			return transfer.CreateRemoteDirectory(remotePathFull)
+		} else {
+			// Prześlij plik
+			return transfer.UploadFile(path, remotePathFull, progressChan)
+		}
+	})
+}
+
+func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
+	// Utwórz lokalny katalog
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return fmt.Errorf("failed to create local directory: %v", err)
+	}
+
+	// Pobierz listę plików z katalogu zdalnego
+	entries, err := transfer.ListRemoteFiles(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to list remote directory: %v", err)
+	}
+
+	// Rekurencyjnie kopiuj zawartość
+	for _, entry := range entries {
+		remoteSrcPath := filepath.Join(remotePath, entry.Name())
+		localDstPath := filepath.Join(localPath, entry.Name())
+
+		if entry.IsDir() {
+			if err := v.copyDirectoryFromRemote(remoteSrcPath, localDstPath, transfer, progressChan); err != nil {
+				return err
+			}
+		} else {
+			if err := transfer.DownloadFile(remoteSrcPath, localDstPath, progressChan); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // deleteFile usuwa wybrany plik
@@ -1194,7 +1343,6 @@ func (v *transferView) renderFileList(entries []FileEntry, selected int, active 
 		return ""
 	}
 
-	// Obliczanie szerokości kolumn na podstawie dostępnej szerokości
 	nameWidth := width - 35 // Szerokość kolumny z nazwą
 	sizeWidth := 10         // Stała szerokość kolumny rozmiaru
 
@@ -1261,20 +1409,13 @@ func (v *transferView) renderFileList(entries []FileEntry, selected int, active 
 			}
 		}
 
-		// Przygotowanie elementów linii z odpowiednimi szerokościami
-		name := displayName
-		if len(name) > nameWidth {
-			name = name[:nameWidth-3] + "..."
-		}
-
 		// Renderowanie nazwy z użyciem stylu
-		styledName := mainStyle.Render(fmt.Sprintf("%-*s", nameWidth, name))
+		styledName := mainStyle.Render(fmt.Sprintf("%-*s", nameWidth, displayName))
 		sizeStr := fmt.Sprintf("%*s", sizeWidth, formatSize(entry.size))
 		dateStr := entry.modTime.Format("2006-01-02 15:04")
 
 		// Złożenie całej linii
 		line := fmt.Sprintf("%s %s %19s", styledName, sizeStr, dateStr)
-
 		content.WriteString(line)
 		content.WriteString("\n")
 	}

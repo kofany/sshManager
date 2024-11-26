@@ -233,6 +233,7 @@ func NewModel() *Model {
 		config:         configManager,
 		terminalWidth:  width,  // Dodane
 		terminalHeight: height, // Dodane
+		selectedItems:  make(map[string]bool),
 	}
 
 	// Wczytaj zapisaną konfigurację
@@ -602,4 +603,18 @@ func (m *Model) IsSelected(path string) bool {
 
 func (m *Model) ClearSelection() {
 	m.selectedItems = make(map[string]bool)
+}
+
+func (m *Model) GetSelectedPaths() []string {
+	var paths []string
+	for path, isSelected := range m.selectedItems {
+		if isSelected {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func (m *Model) HasSelectedItems() bool {
+	return len(m.GetSelectedPaths()) > 0
 }
