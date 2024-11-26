@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	DefaultConfigFileName = "ssh_hosts.json" // Zmiana na wielką literę
-	DefaultConfigDir      = ".config/sshmen" // Zmiana na wielką literę
+	DefaultConfigFileName = "ssh_hosts.json"
+	DefaultConfigDir      = ".config/sshmen"
 	DefaultFilePerms      = 0600
 )
 

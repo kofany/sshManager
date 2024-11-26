@@ -96,15 +96,15 @@ func NewTransferView(model *ui.Model) *transferView {
 			},
 		},
 		remotePanel: Panel{
-			path:   "/",
+			path:   "~/", // Tymczasowa wartość
 			active: false,
 			entries: []FileEntry{
 				{name: "..", isDir: true},
 			},
 		},
 		input:  input,
-		width:  model.GetTerminalWidth(),  // Dodane
-		height: model.GetTerminalHeight(), // Dodane
+		width:  model.GetTerminalWidth(),
+		height: model.GetTerminalHeight(),
 	}
 
 	// Inicjalizujemy panel lokalny
@@ -124,6 +124,12 @@ func NewTransferView(model *ui.Model) *transferView {
 					err:       err,
 				})
 				return
+			}
+
+			// Pobierz katalog domowy i zaktualizuj ścieżkę
+			transfer := v.model.GetTransfer()
+			if homeDir, err := transfer.GetRemoteHomeDir(); err == nil {
+				v.remotePanel.path = homeDir
 			}
 
 			// Update remote panel

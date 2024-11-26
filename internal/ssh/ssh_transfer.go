@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"sshManager/internal/crypto"
@@ -304,4 +305,27 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 	}
 
 	return nil
+}
+
+// Dodaj na końcu pliku internal/ssh/ssh_transfer.go
+
+func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
+	if !ft.connected {
+		return "", fmt.Errorf("not connected")
+	}
+
+	session, err := ft.sshClient.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("failed to create session: %v", err)
+	}
+	defer session.Close()
+
+	output, err := session.Output("echo $HOME")
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %v", err)
+	}
+
+	// Usuń znak nowej linii z końca
+	homeDir := strings.TrimSpace(string(output))
+	return homeDir, nil
 }
