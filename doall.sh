@@ -28,7 +28,14 @@ process_files() {
             echo "Pomijanie pliku gob: $file"
             continue
         fi
-
+        if [[ "$file" == README ]]; then
+            echo "Pomijanie pliku gob: $file"
+            continue
+        fi
+        if [[ "$file" == LICENSE ]]; then
+            echo "Pomijanie pliku gob: $file"
+            continue
+        fi
         if [ -f "$file" ]; then
             echo "# Plik $file" >> "$OUTPUT_FILE"
             cat "$file" >> "$OUTPUT_FILE"

@@ -1129,17 +1129,19 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "6":
 				if !v.transferring {
-					v.statusMessage = "Enter new name:"
+					v.popup = createPopup(promptRename, "Rename", "Enter new name:")
 					v.input.SetValue("")
 					v.input.Focus()
 				}
+				return v, nil
 
 			case "7":
 				if !v.transferring {
-					v.statusMessage = "Enter directory name:"
+					v.popup = createPopup(promptMkdir, "Create Directory", "Enter directory name:")
 					v.input.SetValue("")
 					v.input.Focus()
 				}
+				return v, nil
 
 			case "8":
 				if !v.transferring {
@@ -1194,7 +1196,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		// W metodzie Update w sekcji obsługi klawiszy
+			// W metodzie Update w sekcji obsługi klawiszy
 		case "f6", "r":
 			if !v.transferring {
 				v.popup = createPopup(promptRename, "Rename", "Enter new name:")
