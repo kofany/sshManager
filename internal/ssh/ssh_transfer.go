@@ -137,7 +137,14 @@ func (ft *FileTransfer) RemoveRemoteFile(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	return ft.sftpClient.Remove(path)
+	// Najpierw spróbuj usunąć jako plik
+	err := ft.sftpClient.Remove(path)
+	if err == nil {
+		return nil
+	}
+
+	// Jeśli nie udało się usunąć jako pliku, spróbuj usunąć jako katalog
+	return ft.sftpClient.RemoveDirectory(path)
 }
 
 // RenameRemoteFile zmienia nazwę pliku na zdalnym serwerze
@@ -328,4 +335,101 @@ func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
 	// Usuń znak nowej linii z końca
 	homeDir := strings.TrimSpace(string(output))
 	return homeDir, nil
+}
+
+// RemoveRemoteDirectoryRecursive usuwa katalog rekursywnie
+func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
+	if !ft.connected {
+		return fmt.Errorf("not connected")
+	}
+
+	entries, err := ft.ListRemoteFiles(path)
+	if err != nil {
+		return fmt.Errorf("failed to list remote directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == "." || entry.Name() == ".." {
+			continue
+		}
+
+		fullPath := filepath.Join(path, entry.Name())
+		if entry.IsDir() {
+			if err := ft.RemoveRemoteDirectoryRecursive(fullPath); err != nil {
+				return err
+			}
+		} else {
+			if err := ft.RemoveRemoteFile(fullPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return ft.sftpClient.RemoveDirectory(path)
+}
+
+// UploadDirectory kopiuje cały katalog na serwer
+func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressChan chan<- TransferProgress) error {
+	if !ft.connected {
+		return fmt.Errorf("not connected")
+	}
+
+	if err := ft.CreateRemoteDirectory(remotePath); err != nil {
+		return fmt.Errorf("failed to create remote directory: %v", err)
+	}
+
+	return filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(localPath, path)
+		if err != nil {
+			return err
+		}
+
+		remotePathFull := filepath.Join(remotePath, relPath)
+
+		if info.IsDir() {
+			return ft.CreateRemoteDirectory(remotePathFull)
+		}
+		return ft.UploadFile(path, remotePathFull, progressChan)
+	})
+}
+
+// DownloadDirectory kopiuje cały katalog z serwera
+func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progressChan chan<- TransferProgress) error {
+	if !ft.connected {
+		return fmt.Errorf("not connected")
+	}
+
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return fmt.Errorf("failed to create local directory: %v", err)
+	}
+
+	entries, err := ft.ListRemoteFiles(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to list remote directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == "." || entry.Name() == ".." {
+			continue
+		}
+
+		remoteSrcPath := filepath.Join(remotePath, entry.Name())
+		localDstPath := filepath.Join(localPath, entry.Name())
+
+		if entry.IsDir() {
+			if err := ft.DownloadDirectory(remoteSrcPath, localDstPath, progressChan); err != nil {
+				return err
+			}
+		} else {
+			if err := ft.DownloadFile(remoteSrcPath, localDstPath, progressChan); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

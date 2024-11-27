@@ -13,6 +13,7 @@ import (
 	"sshManager/internal/ssh"
 	"sshManager/internal/ui"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -75,8 +76,10 @@ type transferView struct {
 	showHelp      bool
 	input         textinput.Model
 	mutex         sync.Mutex
-	width         int // Dodane
-	height        int // Dodane
+	width         int         // Dodane
+	height        int         // Dodane
+	escPressed    bool        // flaga wskazująca czy ESC został wciśnięty
+	escTimeout    *time.Timer // timer do resetowania stanu ESC
 }
 type connectionStatusMsg struct {
 	connected bool
@@ -453,6 +456,9 @@ func (v *transferView) View() string {
 		progressBar := v.formatProgressBar(totalWidth)
 		content.WriteString(ui.DescriptionStyle.Render(progressBar))
 	}
+	if v.isWaitingForInput() {
+		content.WriteString("\n" + v.input.View())
+	}
 	footer := v.renderFooter()
 	content.WriteString("\n")
 	content.WriteString(footer)
@@ -767,6 +773,7 @@ func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, tra
 }
 
 // deleteFile usuwa wybrany plik
+// deleteFile usuwa wybrany plik lub katalog
 func (v *transferView) deleteFile() error {
 	panel := v.getActivePanel()
 	if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
@@ -778,8 +785,14 @@ func (v *transferView) deleteFile() error {
 		return fmt.Errorf("cannot delete parent directory reference")
 	}
 
-	// Potwierdź usunięcie
-	v.statusMessage = fmt.Sprintf("Delete %s? (y/n)", entry.name)
+	// Dostosuj komunikat w zależności od typu
+	itemType := "file"
+	if entry.isDir {
+		itemType = "directory"
+	}
+
+	// Potwierdź usunięcie z odpowiednim komunikatem
+	v.statusMessage = fmt.Sprintf("Delete %s '%s'? (y/n)", itemType, entry.name)
 
 	return nil
 }
@@ -791,6 +804,11 @@ func (v *transferView) executeDelete() error {
 	path := filepath.Join(panel.path, entry.name)
 
 	var err error
+	itemType := "file"
+	if entry.isDir {
+		itemType = "directory"
+	}
+
 	if panel == &v.localPanel {
 		if entry.isDir {
 			err = os.RemoveAll(path)
@@ -799,11 +817,16 @@ func (v *transferView) executeDelete() error {
 		}
 	} else {
 		transfer := v.model.GetTransfer()
-		err = transfer.RemoveRemoteFile(path)
+		if entry.isDir {
+			// Rekursywne usuwanie katalogu na zdalnym serwerze
+			err = v.removeRemoteDirectory(path, transfer)
+		} else {
+			err = transfer.RemoveRemoteFile(path)
+		}
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to delete %s: %v", entry.name, err)
+		return fmt.Errorf("failed to delete %s '%s': %v", itemType, entry.name, err)
 	}
 
 	// Odśwież panel po usunięciu
@@ -817,14 +840,50 @@ func (v *transferView) executeDelete() error {
 		return fmt.Errorf("failed to refresh panel: %v", err)
 	}
 
-	v.statusMessage = fmt.Sprintf("Deleted %s", entry.name)
+	v.statusMessage = fmt.Sprintf("Deleted %s '%s'", itemType, entry.name)
 	return nil
+}
+
+func (v *transferView) removeRemoteDirectory(path string, transfer *ssh.FileTransfer) error {
+	// Pobierz listę plików w katalogu
+	entries, err := transfer.ListRemoteFiles(path)
+	if err != nil {
+		return fmt.Errorf("failed to list remote directory: %v", err)
+	}
+
+	// Rekurencyjnie usuń zawartość katalogu
+	for _, entry := range entries {
+		if entry.Name() == "." || entry.Name() == ".." {
+			continue
+		}
+
+		fullPath := filepath.Join(path, entry.Name())
+		if entry.IsDir() {
+			// Rekurencyjnie usuń podkatalog
+			if err := v.removeRemoteDirectory(fullPath, transfer); err != nil {
+				return err
+			}
+		} else {
+			// Usuń plik
+			if err := transfer.RemoveRemoteFile(fullPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Na końcu usuń sam katalog
+	return transfer.RemoveRemoteFile(path)
 }
 
 // createDirectory tworzy nowy katalog
 func (v *transferView) createDirectory(name string) error {
 	if name == "" {
 		return fmt.Errorf("directory name cannot be empty")
+	}
+
+	// Sprawdź czy nazwa nie zawiera niedozwolonych znaków
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("directory name cannot contain path separators")
 	}
 
 	panel := v.getActivePanel()
@@ -834,6 +893,9 @@ func (v *transferView) createDirectory(name string) error {
 	if panel == &v.localPanel {
 		err = os.MkdirAll(path, 0755)
 	} else {
+		if !v.connected {
+			return fmt.Errorf("not connected to remote host")
+		}
 		transfer := v.model.GetTransfer()
 		err = transfer.CreateRemoteDirectory(path)
 	}
@@ -853,7 +915,7 @@ func (v *transferView) createDirectory(name string) error {
 		return fmt.Errorf("failed to refresh panel: %v", err)
 	}
 
-	v.statusMessage = fmt.Sprintf("Created directory %s", name)
+	v.statusMessage = fmt.Sprintf("Created directory '%s'", name)
 	return nil
 }
 
@@ -916,15 +978,16 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mutex.Lock()
 		v.width = msg.Width
 		v.height = msg.Height
-		// Dodajemy aktualizację rozmiaru w głównym modelu
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		v.mutex.Unlock()
 		return v, nil
+
 	case transferProgressMsg:
 		v.mutex.Lock()
 		v.progress = ssh.TransferProgress(msg)
 		v.mutex.Unlock()
 		return v, nil
+
 	case transferFinishedMsg:
 		v.mutex.Lock()
 		v.transferring = false
@@ -932,7 +995,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.errorMessage = fmt.Sprintf("Transfer error: %v", msg.err)
 		} else {
 			v.statusMessage = "Transfer completed successfully"
-			// Odśwież panel docelowy
 			dstPanel := v.getInactivePanel()
 			if dstPanel == &v.localPanel {
 				v.updateLocalPanel()
@@ -942,6 +1004,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		v.mutex.Unlock()
 		return v, nil
+
 	case connectionStatusMsg:
 		v.mutex.Lock()
 		defer v.mutex.Unlock()
@@ -956,6 +1019,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.errorMessage = ""
 		}
 		return v, nil
+
 	case tea.KeyMsg:
 		// Najpierw obsłużmy wyjście z pomocy jeśli jest aktywna
 		if v.showHelp {
@@ -981,14 +1045,80 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.input, cmd = v.input.Update(msg)
 			return v, cmd
 		}
+		// Obsługa sekwencji ESC
+		if v.escPressed {
+			switch msg.String() {
+			case "0", "q":
+				if v.transferring {
+					return v, nil
+				}
+				if v.connected {
+					transfer := v.model.GetTransfer()
+					if transfer != nil {
+						transfer.Disconnect()
+					}
+				}
+				v.model.SetActiveView(ui.ViewMain)
+				return v, nil
 
-		// Reszta obsługi klawiszy
-		switch msg.String() {
-		case "q", "esc":
-			if v.transferring {
-				return v, nil // Zablokuj wyjście podczas transferu
+			case "5":
+				if !v.transferring {
+					cmd := v.copyFile()
+					v.escPressed = false
+					if v.escTimeout != nil {
+						v.escTimeout.Stop()
+					}
+					return v, cmd
+				}
+
+			case "6":
+				if !v.transferring {
+					v.statusMessage = "Enter new name:"
+					v.input.SetValue("")
+					v.input.Focus()
+				}
+
+			case "7":
+				if !v.transferring {
+					v.statusMessage = "Enter directory name:"
+					v.input.SetValue("")
+					v.input.Focus()
+				}
+
+			case "8":
+				if !v.transferring {
+					if err := v.deleteFile(); err != nil {
+						v.handleError(err)
+					}
+				}
 			}
-			// Zamknij połączenie SFTP przed wyjściem
+			// Reset stanu ESC
+			v.escPressed = false
+			if v.escTimeout != nil {
+				v.escTimeout.Stop()
+			}
+			return v, nil
+		}
+
+		// Standardowa obsługa klawiszy
+		switch msg.String() {
+		case "esc":
+			// Aktywuj tryb ESC
+			v.escPressed = true
+			if v.escTimeout != nil {
+				v.escTimeout.Stop()
+			}
+			v.escTimeout = time.NewTimer(500 * time.Millisecond)
+			go func() {
+				<-v.escTimeout.C
+				v.escPressed = false
+			}()
+			return v, nil
+
+		case "q":
+			if v.transferring {
+				return v, nil
+			}
 			if v.connected {
 				transfer := v.model.GetTransfer()
 				if transfer != nil {
@@ -996,6 +1126,37 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			v.model.SetActiveView(ui.ViewMain)
+			return v, nil
+
+		case "f5", "c":
+			if !v.transferring {
+				cmd := v.copyFile()
+				return v, cmd
+			}
+			return v, nil
+
+		case "f6", "r":
+			if !v.transferring {
+				v.statusMessage = "Enter new name:"
+				v.input.SetValue("")
+				v.input.Focus()
+			}
+			return v, nil
+
+		case "f7", "m":
+			if !v.transferring {
+				v.statusMessage = "Enter directory name:"
+				v.input.SetValue("")
+				v.input.Focus()
+			}
+			return v, nil
+
+		case "f8", "d":
+			if !v.transferring {
+				if err := v.deleteFile(); err != nil {
+					v.handleError(err)
+				}
+			}
 			return v, nil
 
 		case "tab":
@@ -1024,44 +1185,13 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		case "f5", "c":
-			if !v.transferring {
-				cmd := v.copyFile()
-				return v, cmd
-			}
-			return v, nil
-
-		case "f8", "d":
-			if !v.transferring {
-				if err := v.deleteFile(); err != nil {
-					v.handleError(err)
-				}
-			}
-			return v, nil
-
-		case "f7", "m":
-			if !v.transferring {
-				v.statusMessage = "Enter directory name:"
-				// Obsługa wprowadzania nazwy będzie w następnym Update
-			}
-			return v, nil
-
-		case "f6", "r":
-			if !v.transferring {
-				newName := "New Name" // To powinno być pobierane z inputu
-				if err := v.renameFile(newName); err != nil {
-					v.handleError(err)
-				}
-			}
-			return v, nil
-
 		case "s":
 			if !v.transferring {
 				panel := v.getActivePanel()
 				if len(panel.entries) > 0 && panel.selectedIndex < len(panel.entries) {
 					entry := panel.entries[panel.selectedIndex]
 					path := filepath.Join(panel.path, entry.name)
-					if entry.name != ".." { // Nie pozwalamy na zaznaczenie ".."
+					if entry.name != ".." {
 						v.model.ToggleSelection(path)
 					}
 				}
@@ -1069,7 +1199,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "y":
-			// Potwierdzenie usunięcia
 			if strings.HasPrefix(v.statusMessage, "Delete ") {
 				if err := v.executeDelete(); err != nil {
 					v.handleError(err)
@@ -1079,7 +1208,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "n":
-			// Anulowanie usunięcia
 			if strings.HasPrefix(v.statusMessage, "Delete ") {
 				v.statusMessage = "Delete cancelled"
 			}
@@ -1090,7 +1218,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 
 		case "ctrl+r":
-			// Odśwież oba panele
 			if err := v.updateLocalPanel(); err != nil {
 				v.handleError(err)
 			}
@@ -1100,19 +1227,9 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return v, nil
-
-		case "ctrl+n":
-			if !v.transferring {
-				name := "New Directory" // To powinno być pobierane z inputu
-				if err := v.createDirectory(name); err != nil {
-					v.handleError(err)
-				}
-			}
-			return v, nil
 		}
 
 	case ssh.TransferProgress:
-		// Aktualizacja postępu transferu
 		v.progress = msg
 		return v, nil
 	}
@@ -1172,73 +1289,60 @@ func (v *transferView) isWaitingForInput() bool {
 var helpText = `
  File Transfer Help
  -----------------
- Tab       - Switch panel
- Enter     - Enter directory
- F5/c      - Copy file
- F6/r      - Rename
- F7/m      - Create directory
- F8/d      - Delete
- F1        - Toggle help
- Ctrl+r    - Refresh
- Esc/q     - Exit
- 
+ Tab          - Switch panel
+ Enter        - Enter directory
+ F5/ESC+5/c   - Copy file
+ F6/ESC+6/r   - Rename
+ F7/ESC+7/m   - Create directory
+ F8/ESC+8/d   - Delete
+ F1           - Toggle help
+ Ctrl+r       - Refresh
+ q/ESC+0      - Exit
+ s            - Select/Unselect file
+
  Navigation
  ----------
- Up/k      - Move up
- Down/j    - Move down
- `
+ Up/k         - Move up
+ Down/j       - Move down
+`
 
 func (v *transferView) renderShortcuts() string {
-	shortcuts := []struct {
-		key         string
-		description string
-		disabled    bool
-	}{
-		{"Tab", "Switch panel", !v.connected},
-		{"s", "Select", v.transferring}, // Dodany nowy skrót
-		{"F5/c", "Copy", v.transferring},
-		{"F6/r", "Rename", v.transferring},
-		{"F7/m", "MkDir", v.transferring},
-		{"F8/d", "Delete", v.transferring},
-		{"F1", "Help", false},
-		{"Esc", "Exit", false},
+	t := table.New()
+
+	columns := []table.Column{
+		{Title: "Switch panel", Width: 12},
+		{Title: "Select", Width: 8},
+		{Title: "Copy", Width: 14},
+		{Title: "Rename", Width: 14},
+		{Title: "MkDir", Width: 14},
+		{Title: "Delete", Width: 14},
+		{Title: "Help", Width: 6},
+		{Title: "Exit", Width: 10},
 	}
+	t.SetColumns(columns)
 
-	// Oblicz maksymalną szerokość dla klawiszy i opisów
-	maxKeyWidth := 0
-	maxDescWidth := 0
-	for _, sc := range shortcuts {
-		if len(sc.key) > maxKeyWidth {
-			maxKeyWidth = len(sc.key)
-		}
-		if len(sc.description) > maxDescWidth {
-			maxDescWidth = len(sc.description)
-		}
+	rows := []table.Row{
+		{
+			"[Tab]",
+			"[s]",
+			"[F5|ESC+5|c]",
+			"[F6|ESC+6|r]",
+			"[F7|ESC+7|m]",
+			"[F8|ESC+8|d]",
+			"[F1]",
+			"[q|ESC+0]",
+		},
 	}
+	t.SetRows(rows)
 
-	var result strings.Builder
-	for i, sc := range shortcuts {
-		keyStyle := ui.ButtonStyle
-		descStyle := ui.DescriptionStyle
-		if sc.disabled {
-			keyStyle = keyStyle.Foreground(ui.Subtle)
-			descStyle = descStyle.Foreground(ui.Subtle)
-		}
+	// Ustawiamy style
+	s := table.DefaultStyles()
+	t.SetStyles(s)
 
-		// Wyrównaj klawisz do prawej, a opis do lewej w kolumnie
-		cell := fmt.Sprintf("%*s → %-*s",
-			maxKeyWidth, keyStyle.Render(sc.key),
-			maxDescWidth, descStyle.Render(sc.description))
+	// Ustawiamy wysokość tabeli na 2 (nagłówek + jeden wiersz)
+	t.SetHeight(2)
 
-		// Dodaj separator między kolumnami, oprócz ostatniej
-		if i < len(shortcuts)-1 {
-			cell += " ║ "
-		}
-
-		result.WriteString(cell)
-	}
-
-	return result.String()
+	return t.View()
 }
 
 // Pomocnicze stałe dla kolorów i stylów
@@ -1466,38 +1570,6 @@ func (v *transferView) sendConnectionUpdate() tea.Cmd {
 	}
 }
 
-func (v *transferView) startTransferCmd(srcPath string, dstPath string, transfer *ssh.FileTransfer, upload bool) tea.Cmd {
-	return func() tea.Msg {
-		progressChan := make(chan ssh.TransferProgress)
-		doneChan := make(chan error, 1)
-
-		// Uruchom transfer w goroutine
-		go func() {
-			var err error
-			if upload {
-				err = transfer.UploadFile(srcPath, dstPath, progressChan)
-			} else {
-				err = transfer.DownloadFile(srcPath, dstPath, progressChan)
-			}
-			doneChan <- err
-			close(progressChan)
-		}()
-
-		// Goroutine do czytania postępu i wysyłania wiadomości
-		go func() {
-			for progress := range progressChan {
-				// Wysyłaj wiadomości o postępie
-				v.model.Program.Send(transferProgressMsg(progress))
-			}
-			// Po zakończeniu transferu, wyślij wiadomość transferFinishedMsg
-			err := <-doneChan
-			v.model.Program.Send(transferFinishedMsg{err: err})
-		}()
-
-		return nil
-	}
-}
-
 func (v *transferView) renderFooter() string {
 	var footerContent strings.Builder
 
@@ -1535,3 +1607,5 @@ func (v *transferView) renderFooter() string {
 
 	return footerContent.String()
 }
+
+// createDirectory tworzy nowy katalog

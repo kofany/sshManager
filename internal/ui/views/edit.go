@@ -351,6 +351,8 @@ func (v *editView) renderControls(controls ...Control) string {
 
 // internal/ui/views/edit.go - część 3
 
+// internal/ui/views/edit.go
+
 func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -358,33 +360,40 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
 		v.height = msg.Height
-		// Dodajemy aktualizację rozmiaru w głównym modelu
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
 	case tea.KeyMsg:
+		// Najpierw sprawdzamy czy jesteśmy w trybie wprowadzania tekstu
+		if v.editing && v.mode != modeSelectPassword &&
+			v.mode != modeHostList && v.mode != modePasswordList {
+			// Obsługujemy tylko klawisze specjalne w trybie edycji
+			switch msg.String() {
+			case "esc":
+				return v.handleEscapeKey()
+			case "enter":
+				return v.handleEnterKey()
+			case "tab", "shift+tab", "up", "down":
+				return v.handleNavigationKey(msg.String())
+			default:
+				// Przekazujemy wszystkie inne klawisze do aktywnego pola tekstowego
+				v.inputs[v.activeField], cmd = v.inputs[v.activeField].Update(msg)
+				return v, cmd
+			}
+		}
+
+		// Jeśli nie jesteśmy w trybie edycji, obsługujemy wszystkie klawisze normalnie
 		switch msg.String() {
 		case "esc":
 			return v.handleEscapeKey()
-
 		case "tab", "shift+tab", "up", "down":
 			return v.handleNavigationKey(msg.String())
-
 		case "enter":
 			return v.handleEnterKey()
-
 		case "h", "H", "p", "P":
 			return v.handleModeKey(msg.String())
-
 		case "e", "d":
 			return v.handleActionKey(msg.String())
 		}
-	}
-
-	// Handle text input updates when editing
-	if v.editing && v.mode != modeSelectPassword && v.mode != modeHostList && v.mode != modePasswordList {
-		var cmd tea.Cmd
-		v.inputs[v.activeField], cmd = v.inputs[v.activeField].Update(msg)
-		return v, cmd
 	}
 
 	return v, cmd
