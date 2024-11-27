@@ -28,11 +28,11 @@ process_files() {
             echo "Pomijanie pliku gob: $file"
             continue
         fi
-        if [[ "$file" == README ]]; then
+        if [[ "$file" == "README" ]]; then
             echo "Pomijanie pliku gob: $file"
             continue
         fi
-        if [[ "$file" == LICENSE ]]; then
+        if [[ "$file" == "LICENSE" ]]; then
             echo "Pomijanie pliku gob: $file"
             continue
         fi
