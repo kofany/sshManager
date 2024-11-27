@@ -32,7 +32,7 @@ func getHomeDir() string {
 const (
 	localPanelActive  = true
 	remotePanelActive = false
-	maxVisibleItems   = 15
+	maxVisibleItems   = 20
 	headerHeight      = 3
 	footerHeight      = 4
 )
@@ -80,10 +80,30 @@ type transferView struct {
 	height        int         // Dodane
 	escPressed    bool        // flaga wskazująca czy ESC został wciśnięty
 	escTimeout    *time.Timer // timer do resetowania stanu ESC
+	popup         *popup      // nowe pole
+
 }
 type connectionStatusMsg struct {
 	connected bool
 	err       error
+}
+
+type promptType int
+
+const (
+	promptNone promptType = iota
+	promptRename
+	promptMkdir
+	promptDelete
+)
+
+type popup struct {
+	promptType promptType
+	title      string
+	message    string
+	input      textinput.Model
+	width      int
+	height     int
 }
 
 func NewTransferView(model *ui.Model) *transferView {
@@ -305,8 +325,8 @@ func (v *transferView) switchActivePanel() {
 func (v *transferView) renderPanel(p *Panel) string {
 	var content strings.Builder
 
-	// Oblicz szerokość panelu na podstawie szerokości ekranu
-	panelWidth := (min(v.width-40, 160) - 3) / 2 // Dostosowujemy do nowej całkowitej szerokości
+	// Oblicz szerokość panelu
+	panelWidth := (min(v.width-40, 160) - 3) / 2
 
 	// Zastosuj styl panelu z ramką
 	var panelContent strings.Builder
@@ -322,41 +342,21 @@ func (v *transferView) renderPanel(p *Panel) string {
 	panelContent.WriteString(pathStyle.Render(pathText))
 	panelContent.WriteString("\n")
 
-	// Dostosuj szerokości kolumn do dostępnej przestrzeni
-	nameWidth := min(30, panelWidth-35) // Zostaw miejsce na size i modified
-	sizeWidth := 10
-	modifiedWidth := 20
+	// Renderowanie listy plików
+	filesList := v.renderFileList(
+		p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
+		p.selectedIndex-p.scrollOffset,
+		p.active,
+		panelWidth-2,
+	)
+	panelContent.WriteString(filesList)
 
-	// Nagłówki kolumn
-	panelContent.WriteString(ui.HeaderStyle.Render(
-		fmt.Sprintf("%-*s %*s %*s",
-			nameWidth, "Name",
-			sizeWidth, "Size",
-			modifiedWidth, "Modified"),
-	))
-	panelContent.WriteString("\n")
-
-	// Sprawdź czy entries nie jest nil i czy ma elementy
-	if len(p.entries) > 0 {
-		// Lista plików
-		filesList := v.renderFileList(
-			p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
-			p.selectedIndex-p.scrollOffset,
-			p.active,
-			panelWidth-2, // szerokość listy plików z uwzględnieniem marginesów
-		)
-		panelContent.WriteString(filesList)
-
-		// Informacja o przewijaniu
-		if len(p.entries) > maxVisibleItems {
-			panelContent.WriteString(fmt.Sprintf(" Showing %d-%d of %d items",
-				p.scrollOffset+1,
-				min(p.scrollOffset+maxVisibleItems, len(p.entries)),
-				len(p.entries)))
-		}
-	} else {
-		// Dodaj informację gdy katalog jest pusty
-		panelContent.WriteString("\n Directory is empty")
+	// Informacja o przewijaniu
+	if len(p.entries) > maxVisibleItems {
+		panelContent.WriteString(fmt.Sprintf("\nShowing %d-%d of %d items",
+			p.scrollOffset+1,
+			min(p.scrollOffset+maxVisibleItems, len(p.entries)),
+			len(p.entries)))
 	}
 
 	// Zastosuj styl całego panelu
@@ -427,11 +427,9 @@ func (v *transferView) View() string {
 	} else {
 		rightPanel = v.renderPanel(&v.remotePanel)
 	}
-
 	// Wyrównaj panele
 	leftLines := strings.Split(leftPanel, "\n")
 	rightLines := strings.Split(rightPanel, "\n")
-
 	maxLines := max(len(leftLines), len(rightLines))
 
 	// Wyrównaj liczbe linii w panelach
@@ -456,15 +454,30 @@ func (v *transferView) View() string {
 		progressBar := v.formatProgressBar(totalWidth)
 		content.WriteString(ui.DescriptionStyle.Render(progressBar))
 	}
+
 	if v.isWaitingForInput() {
 		content.WriteString("\n" + v.input.View())
 	}
+
 	footer := v.renderFooter()
 	content.WriteString("\n")
 	content.WriteString(footer)
 
 	// Renderuj całość w oknie i wycentruj
 	finalContent := ui.WindowStyle.Render(content.String())
+
+	// Jeśli jest aktywny popup, renderuj go na wierzchu
+	if v.popup != nil {
+		return lipgloss.Place(
+			v.width,
+			v.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			finalContent+"\n"+v.renderPopup(),
+			lipgloss.WithWhitespaceChars(""),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		)
+	}
 
 	return lipgloss.Place(
 		v.width,
@@ -1021,6 +1034,41 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case tea.KeyMsg:
+		// Najpierw obsłużmy popup jeśli jest aktywny
+		if v.popup != nil {
+			switch msg.String() {
+			case "esc":
+				v.popup = nil
+				return v, nil
+			case "enter":
+				if v.popup.promptType != promptDelete {
+					if err := v.handleCommand(v.input.Value()); err != nil {
+						v.handleError(err)
+					}
+					v.popup = nil
+					return v, nil
+				}
+			case "y":
+				if v.popup.promptType == promptDelete {
+					if err := v.executeDelete(); err != nil {
+						v.handleError(err)
+					}
+					v.popup = nil
+					return v, nil
+				}
+			case "n":
+				if v.popup.promptType == promptDelete {
+					v.popup = nil
+					return v, nil
+				}
+			default:
+				if v.popup.promptType != promptDelete {
+					var cmd tea.Cmd
+					v.input, cmd = v.input.Update(msg)
+					return v, cmd
+				}
+			}
+		}
 		// Najpierw obsłużmy wyjście z pomocy jeśli jest aktywna
 		if v.showHelp {
 			switch msg.String() {
@@ -1034,16 +1082,24 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Obsługa wejścia użytkownika, jeśli czekamy na input
 		if v.isWaitingForInput() {
-			if msg.Type == tea.KeyEnter {
+			switch msg.String() {
+			case "enter":
 				if err := v.handleCommand(v.input.Value()); err != nil {
 					v.handleError(err)
 				}
 				v.input.Reset()
 				return v, nil
+			case "esc": // Dodajemy obsługę ESC
+				// Czyścimy komunikat o oczekiwaniu na input
+				v.statusMessage = ""
+				// Resetujemy pole input
+				v.input.Reset()
+				return v, nil
+			default:
+				var cmd tea.Cmd
+				v.input, cmd = v.input.Update(msg)
+				return v, cmd
 			}
-			var cmd tea.Cmd
-			v.input, cmd = v.input.Update(msg)
-			return v, cmd
 		}
 		// Obsługa sekwencji ESC
 		if v.escPressed {
@@ -1103,7 +1159,10 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Standardowa obsługa klawiszy
 		switch msg.String() {
 		case "esc":
-			// Aktywuj tryb ESC
+			if v.popup != nil {
+				v.popup = nil
+				return v, nil
+			}
 			v.escPressed = true
 			if v.escTimeout != nil {
 				v.escTimeout.Stop()
@@ -1135,9 +1194,10 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
+		// W metodzie Update w sekcji obsługi klawiszy
 		case "f6", "r":
 			if !v.transferring {
-				v.statusMessage = "Enter new name:"
+				v.popup = createPopup(promptRename, "Rename", "Enter new name:")
 				v.input.SetValue("")
 				v.input.Focus()
 			}
@@ -1145,7 +1205,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "f7", "m":
 			if !v.transferring {
-				v.statusMessage = "Enter directory name:"
+				v.popup = createPopup(promptMkdir, "Create Directory", "Enter directory name:")
 				v.input.SetValue("")
 				v.input.Focus()
 			}
@@ -1153,9 +1213,17 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "f8", "d":
 			if !v.transferring {
-				if err := v.deleteFile(); err != nil {
-					v.handleError(err)
+				panel := v.getActivePanel()
+				if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
+					return v, nil
 				}
+				entry := panel.entries[panel.selectedIndex]
+				if entry.name == ".." {
+					return v, nil
+				}
+				v.popup = createPopup(promptDelete, "Delete", fmt.Sprintf("Delete %s '%s'? (y/n)",
+					map[bool]string{true: "directory", false: "file"}[entry.isDir],
+					entry.name))
 			}
 			return v, nil
 
@@ -1239,13 +1307,23 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleCommand obsługuje wprowadzanie komend
 func (v *transferView) handleCommand(cmd string) error {
-	if strings.HasPrefix(v.statusMessage, "Enter directory name:") {
-		return v.createDirectory(cmd)
+	if v.popup == nil {
+		return fmt.Errorf("no active popup")
 	}
-	if strings.HasPrefix(v.statusMessage, "Enter new name:") {
-		return v.renameFile(cmd)
+
+	switch v.popup.promptType {
+	case promptRename:
+		err := v.renameFile(cmd)
+		v.popup = nil
+		return err
+	case promptMkdir:
+		err := v.createDirectory(cmd)
+		v.popup = nil
+		return err
+	default:
+		v.popup = nil
+		return fmt.Errorf("unknown command")
 	}
-	return fmt.Errorf("unknown command")
 }
 
 // internal/ui/views/transfer.go
@@ -1440,91 +1518,123 @@ func getFileType(entry FileEntry) string {
 	return "default"
 }
 
-func (v *transferView) renderFileList(entries []FileEntry, selected int, active bool, width int) string {
-	var content strings.Builder
+// internal/ui/views/transfer.go
+// internal/ui/views/transfer.go
 
-	if len(entries) == 0 {
-		return ""
-	}
+func (v *transferView) renderFileList(entries []FileEntry, selected int, _ bool, width int) string {
+	t := table.New(
+		table.WithColumns([]table.Column{
+			{Title: " ", Width: 2}, // Kolumna na gwiazdkę
+			{Title: "Name", Width: width - 37},
+			{Title: "Size", Width: 10},
+			{Title: "Modified", Width: 19},
+		}),
+	)
 
-	nameWidth := width - 35 // Szerokość kolumny z nazwą
-	sizeWidth := 10         // Stała szerokość kolumny rozmiaru
-
-	for i, entry := range entries {
-		isSelected := i == selected && selected >= 0 && selected < len(entries)
+	var rows []table.Row
+	for _, entry := range entries {
 		path := filepath.Join(v.getActivePanel().path, entry.name)
 		isMarked := v.model.IsSelected(path)
 
-		// Przygotowanie nazwy pliku
-		baseName := entry.name
-		if entry.isDir {
-			baseName = "[" + baseName + "]"
-		}
-
-		// Dodanie prefiksu dla zaznaczonych elementów
-		prefix := "  "
+		// Tworzenie wiersza
+		prefix := " "
 		if isMarked {
-			prefix = "* "
+			prefix = "*"
 		}
-		displayName := prefix + baseName
 
-		// Utworzenie stylu
-		mainStyle := lipgloss.NewStyle()
-		if isSelected && active {
-			mainStyle = mainStyle.Bold(true).Background(ui.Highlight).Foreground(lipgloss.Color("0"))
-		} else if isSelected {
-			mainStyle = mainStyle.Underline(false)
-		} else {
-			if entry.isDir {
-				if active {
-					mainStyle = mainStyle.Inherit(ui.DirectoryStyle)
+		name := entry.name
+		if entry.isDir {
+			name = "[" + name + "]"
+		}
+
+		row := table.Row{
+			prefix,
+			name,
+			formatSize(entry.size),
+			entry.modTime.Format("2006-01-02 15:04"),
+		}
+		rows = append(rows, row)
+	}
+
+	t.SetRows(rows)
+
+	// Renderujemy tabelę
+	tableOutput := t.View()
+
+	// Teraz dodajemy kolory linijka po linijce
+	var coloredOutput strings.Builder
+	lines := strings.Split(tableOutput, "\n")
+
+	for i, line := range lines {
+		// Pomijamy linie nagłówka (pierwsza linia)
+		if i == 0 {
+			coloredOutput.WriteString(line + "\n")
+			continue
+		}
+
+		// Sprawdzamy czy ta linia odpowiada jakiemuś plikowi
+		entryIndex := i - 1 // odejmujemy 1 bo pierwsza linia to nagłówek
+		if entryIndex >= 0 && entryIndex < len(entries) {
+			entry := entries[entryIndex]
+			var style lipgloss.Style
+
+			// Specjalne traktowanie linii ".."
+			if entry.name == ".." {
+				if entryIndex == selected {
+					// Ten sam styl dla aktywnego i nieaktywnego panelu gdy ".." jest zaznaczone
+					style = lipgloss.NewStyle().
+						Bold(true).
+						Background(ui.Highlight).
+						Foreground(lipgloss.Color("0"))
 				} else {
-					mainStyle = mainStyle.Foreground(ui.Subtle)
+					style = ui.DirectoryStyle
 				}
+			} else if entryIndex == selected {
+				// Ten sam styl dla zaznaczenia w obu panelach
+				style = lipgloss.NewStyle().
+					Bold(true).
+					Background(ui.Highlight).
+					Foreground(lipgloss.Color("0"))
+			} else if entry.isDir {
+				// Katalogi zawsze używają DirectoryStyle
+				style = ui.DirectoryStyle
 			} else {
 				switch getFileType(entry) {
 				case "executable":
-					mainStyle = mainStyle.Inherit(ui.ExecutableStyle)
+					style = ui.ExecutableStyle
 				case "archive":
-					mainStyle = mainStyle.Inherit(ui.ArchiveStyle)
+					style = ui.ArchiveStyle
 				case "image":
-					mainStyle = mainStyle.Inherit(ui.ImageStyle)
+					style = ui.ImageStyle
 				case "document":
-					mainStyle = mainStyle.Inherit(ui.DocumentStyle)
+					style = ui.DocumentStyle
 				case "code_c":
-					mainStyle = mainStyle.Inherit(ui.CodeCStyle)
+					style = ui.CodeCStyle
 				case "code_h":
-					mainStyle = mainStyle.Inherit(ui.CodeHStyle)
+					style = ui.CodeHStyle
 				case "code_go":
-					mainStyle = mainStyle.Inherit(ui.CodeGoStyle)
+					style = ui.CodeGoStyle
 				case "code_py":
-					mainStyle = mainStyle.Inherit(ui.CodePyStyle)
+					style = ui.CodePyStyle
 				case "code_js":
-					mainStyle = mainStyle.Inherit(ui.CodeJsStyle)
+					style = ui.CodeJsStyle
 				case "code_json":
-					mainStyle = mainStyle.Inherit(ui.CodeJsonStyle)
+					style = ui.CodeJsonStyle
 				default:
 					if strings.HasPrefix(getFileType(entry), "code_") {
-						mainStyle = mainStyle.Inherit(ui.CodeDefaultStyle)
+						style = ui.CodeDefaultStyle
 					} else {
-						mainStyle = mainStyle.Inherit(ui.DefaultFileStyle)
+						style = ui.DefaultFileStyle
 					}
 				}
 			}
+			coloredOutput.WriteString(style.Render(line) + "\n")
+		} else {
+			coloredOutput.WriteString(line + "\n")
 		}
-
-		// Renderowanie nazwy z użyciem stylu
-		styledName := mainStyle.Render(fmt.Sprintf("%-*s", nameWidth, displayName))
-		sizeStr := fmt.Sprintf("%*s", sizeWidth, formatSize(entry.size))
-		dateStr := entry.modTime.Format("2006-01-02 15:04")
-
-		// Złożenie całej linii
-		line := fmt.Sprintf("%s %s %19s", styledName, sizeStr, dateStr)
-		content.WriteString(line)
-		content.WriteString("\n")
 	}
 
-	return content.String()
+	return coloredOutput.String()
 }
 
 func (v *transferView) ensureConnected() error {
@@ -1608,4 +1718,67 @@ func (v *transferView) renderFooter() string {
 	return footerContent.String()
 }
 
-// createDirectory tworzy nowy katalog
+func createPopup(pType promptType, title string, message string) *popup {
+	input := textinput.New()
+	input.Placeholder = "Enter value..."
+	input.Focus()
+
+	width := 50 // szerokość popupu
+	height := 7 // wysokość popupu
+
+	return &popup{
+		promptType: pType,
+		title:      title,
+		message:    message,
+		input:      input,
+		width:      width,
+		height:     height,
+	}
+}
+
+func (v *transferView) renderPopup() string {
+	if v.popup == nil {
+		return ""
+	}
+
+	// Style dla popupu
+	popupStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.Border).
+		Padding(1, 2).
+		Width(v.popup.width).
+		Height(v.popup.height)
+
+	titleStyle := ui.TitleStyle.
+		Align(lipgloss.Center).
+		Width(v.popup.width - 4)
+
+	// Budowanie zawartości popupu
+	var content strings.Builder
+	content.WriteString(titleStyle.Render(v.popup.title) + "\n\n")
+	content.WriteString(v.popup.message + "\n")
+
+	// Dodaj pole input dla promptów wymagających wprowadzenia tekstu
+	if v.popup.promptType != promptDelete {
+		content.WriteString(v.input.View())
+	}
+
+	// Dodaj informację o klawiszach
+	var keys string
+	switch v.popup.promptType {
+	case promptDelete:
+		keys = "y - Confirm, n - Cancel, ESC - Cancel"
+	default:
+		keys = "Enter - Confirm, ESC - Cancel"
+	}
+	content.WriteString("\n" + ui.DescriptionStyle.Render(keys))
+
+	// Renderuj popup
+	return lipgloss.Place(
+		v.width,
+		v.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		popupStyle.Render(content.String()),
+	)
+}
