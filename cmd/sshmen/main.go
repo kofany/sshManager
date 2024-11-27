@@ -149,7 +149,7 @@ func main() {
 	}
 
 	// Uruchomienie programu
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithMouseCellMotion(), tea.WithAltScreen())
 	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v", err)
