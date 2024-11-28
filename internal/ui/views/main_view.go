@@ -5,9 +5,11 @@ import (
 	"sshManager/internal/models"
 	"sshManager/internal/ui"
 	"strings"
+	"time"
 
 	"sshManager/internal/ssh"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -21,8 +23,10 @@ type mainView struct {
 	errMsg        string
 	status        string
 	connecting    bool
-	width         int // Dodane
-	height        int // Dodane
+	width         int
+	height        int
+	escPressed    bool
+	escTimeout    *time.Timer
 }
 
 type connectError string
@@ -49,9 +53,8 @@ func NewMainView(model *ui.Model) *mainView {
 
 func (v *mainView) Init() tea.Cmd {
 	return tea.Sequence(
-		tea.ClearScreen,
-		tea.ClearScrollArea,
 		tea.EnterAltScreen,
+		tea.ClearScreen,
 	)
 }
 
@@ -60,11 +63,11 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		v.width = msg.Width
 		v.height = msg.Height
-		// Dodajemy aktualizację rozmiaru w głównym modelu
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
 
 	case tea.KeyMsg:
+		// Najpierw obsłużmy standardowe klawisze nawigacji
 		switch msg.String() {
 		case "q", "ctrl+c":
 			v.model.SetQuitting(true)
@@ -87,57 +90,99 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				v.errMsg = ""
 			}
+
 		case "enter", "c":
-			// Jeśli trwa łączenie lub nie ma hostów, ignorujemy
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
 			return v.handleConnect()
 
-		case "e":
+		// Obsługa edycji hosta (e, f4, ESC+4)
+		case "e", "f4":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
-			host := v.hosts[v.selectedIndex]
-			v.model.SetSelectedHost(&host)
-			v.model.SetActiveView(ui.ViewEdit)
-			// Dodajemy sequence komend
-			return v, tea.Sequence(
-				tea.ClearScreen,
-				func() tea.Msg {
-					return tea.WindowSizeMsg{
-						Width:  v.width,
-						Height: v.height,
-					}
-				},
-			)
+			editView := NewEditView(v.model)
+			editView.currentHost = &v.hosts[v.selectedIndex]
+			editView.editingHost = true
+			editView.editing = true
+			editView.mode = modeNormal
+			editView.initializeHostInputs()
+			return editView, nil
 
+		// Obsługa dodawania nowego hosta (h)
+		case "h":
+			if !v.connecting {
+				editView := NewEditView(v.model)
+				editView.editingHost = true
+				editView.editing = true
+				editView.mode = modeNormal
+				editView.initializeHostInputs()
+				return editView, nil
+			}
+
+		// Obsługa zarządzania hasłami (p)
+		case "p":
+			if !v.connecting {
+				editView := NewEditView(v.model)
+				editView.mode = modePasswordList
+				editView.editing = true
+				editView.passwords = v.model.GetPasswords()
+				editView.selectedItemIndex = 0
+				return editView, nil
+			}
 		case "t":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
 			return v.handleTransfer()
-		case "d":
+
+		case "d", "f8":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
 			return v.handleDelete()
 
-		case "n":
-			if !v.connecting {
-				v.model.SetActiveView(ui.ViewEdit)
+		case "esc":
+			v.escPressed = true
+			if v.escTimeout != nil {
+				v.escTimeout.Stop()
+			}
+			v.escTimeout = time.NewTimer(500 * time.Millisecond)
+			go func() {
+				<-v.escTimeout.C
+				v.escPressed = false
+			}()
+			return v, nil
+		}
+
+		// Obsługa sekwencji ESC
+		if v.escPressed {
+			switch msg.String() {
+			case "4":
+				if len(v.hosts) > 0 && !v.connecting {
+					editView := NewEditView(v.model)
+					editView.currentHost = &v.hosts[v.selectedIndex]
+					editView.editingHost = true
+					editView.editing = true
+					editView.mode = modeNormal
+					editView.initializeHostInputs()
+					return editView, nil
+				}
+				v.escPressed = false
+				return v, nil
+			case "8":
+				if len(v.hosts) > 0 && !v.connecting {
+					return v.handleDelete()
+				}
+				v.escPressed = false
 				return v, nil
 			}
-
-		case "r":
-			if !v.connecting {
-				v.hosts = v.model.GetHosts()
-				v.errMsg = ""
-				if v.selectedIndex >= len(v.hosts) {
-					v.selectedIndex = len(v.hosts) - 1
-				}
-				v.status = "Host list refreshed"
+			v.escPressed = false
+			if v.escTimeout != nil {
+				v.escTimeout.Stop()
 			}
+			return v, nil
 		}
 
 	case connectFinishedMsg:
@@ -275,8 +320,8 @@ func (v *mainView) View() string {
 	// Zastosuj styl ramki do całej zawartości
 	framedContent := ui.WindowStyle.Render(content.String())
 
-	// Zawsze używaj wymiarów do wycentrowania
-	return lipgloss.Place(
+	// Podstawowy widok
+	baseView := lipgloss.Place(
 		v.width,
 		v.height,
 		lipgloss.Center,
@@ -285,6 +330,8 @@ func (v *mainView) View() string {
 		lipgloss.WithWhitespaceChars(""),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
+
+	return baseView
 }
 
 func (v *mainView) renderHostPanel() string {
@@ -356,34 +403,47 @@ func (v *mainView) renderStatusBar() string {
 }
 
 func (v *mainView) renderCommandBar() string {
-	commands := []struct {
-		key  string
-		desc string
-	}{
-		{"Enter/c", "Connect"},
-		{"t", "File Transfer"},
-		{"e", "Edit"},
-		{"d", "Delete"},
-		{"n", "New Host"},
-		{"q", "Quit"},
+	t := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "Connect", Width: 11},
+			{Title: "Navigate", Width: 12},
+			{Title: "Edit Host", Width: 14},
+			{Title: "Add Host", Width: 10},
+			{Title: "Pass", Width: 8},
+			{Title: "Transfer", Width: 11},
+			{Title: "Delete Host", Width: 14},
+			{Title: "Quit", Width: 5},
+		}),
+	)
+
+	rows := []table.Row{
+		{
+			"enter/c",    // Connect
+			"↑↓/k j",     // Navigate
+			"e/f4/ESC+4", // Edit
+			"h",          // Add
+			"p",          // Pass
+			"t",          // Transfer
+			"d/f8/ESC+8", // Delete
+			"q/^c",       // Quit
+		},
 	}
 
-	var cmdBar strings.Builder
-	for i, cmd := range commands {
-		if i > 0 {
-			cmdBar.WriteString(" ∥")
-		}
-		// Odwróć kolejność: najpierw opis, potem klawisz
-		cmdBar.WriteString(ui.DescriptionStyle.Render(cmd.desc))
-		cmdBar.WriteString(" ― ")
-		cmdBar.WriteString(ui.ButtonStyle.Render(cmd.key))
-	}
+	t.SetRows(rows)
 
-	return ui.CommandBarStyle.
-		Align(lipgloss.Left).
-		Render(cmdBar.String())
-}
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		Foreground(ui.Subtle).
+		Bold(true).
+		Padding(0, 0)
 
-func (v *mainView) IsQuitting() bool {
-	return v.model.IsQuitting()
+	s.Cell = s.Cell.
+		Foreground(ui.Special).
+		Bold(true).
+		Padding(0, 0)
+
+	t.SetStyles(s)
+	t.SetHeight(2)
+
+	return t.View()
 }

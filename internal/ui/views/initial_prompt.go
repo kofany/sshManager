@@ -47,10 +47,9 @@ func (m *initialPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.errorMessage = "Password cannot be empty"
 				return m, nil
 			}
-			// Najpierw wyczyść ekran, potem wyślij hasło
+			// Wyczyść ekran i wyślij hasło
 			return m, tea.Sequence(
 				tea.ClearScreen,
-				tea.ClearScrollArea,
 				func() tea.Msg {
 					return tea.WindowSizeMsg{
 						Width:  m.width,
@@ -67,6 +66,7 @@ func (m *initialPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
 func (m *initialPromptModel) View() string {
 	// Definicja stylów
 	asciiArtStyle := lipgloss.NewStyle().

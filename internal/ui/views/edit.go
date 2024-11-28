@@ -7,6 +7,7 @@ import (
 	"sshManager/internal/models"
 	"sshManager/internal/ui"
 	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,10 +46,21 @@ type editView struct {
 
 func NewEditView(model *ui.Model) *editView {
 	v := &editView{
-		model:  model,
-		inputs: make([]textinput.Model, 6), // Name, Description, Login, IP, Port, Password
-		width:  model.GetTerminalWidth(),   // Dodane
-		height: model.GetTerminalHeight(),  // Dodane
+		model:                 model,
+		inputs:                make([]textinput.Model, 6), // Name, Description, Login, IP, Port, Password
+		width:                 model.GetTerminalWidth(),
+		height:                model.GetTerminalHeight(),
+		mode:                  modeNormal,
+		activeField:           0,
+		editing:               false,
+		editingHost:           false,
+		errorMsg:              "",
+		selectedPasswordIndex: 0,
+		selectedItemIndex:     0,
+		deleteConfirmation:    false,
+		hosts:                 make([]models.Host, 0),
+		passwords:             make([]models.Password, 0),
+		passwordList:          make([]models.Password, 0),
 	}
 
 	// Initialize text inputs
@@ -73,7 +85,6 @@ func NewEditView(model *ui.Model) *editView {
 			t.Placeholder = "Password"
 			t.EchoMode = textinput.EchoPassword
 		}
-
 		v.inputs[i] = t
 	}
 
@@ -81,17 +92,22 @@ func NewEditView(model *ui.Model) *editView {
 }
 
 func (v *editView) Init() tea.Cmd {
+	// aktualizacja list przy inicjalizacji
+	v.model.UpdateLists()
 	return textinput.Blink
 }
 
 func (v *editView) View() string {
-	var content string
+	if v.width == 0 || v.height == 0 {
+		// Zabezpieczenie przed zerowymi wymiarami
+		v.width = v.model.GetTerminalWidth()
+		v.height = v.model.GetTerminalHeight()
+	}
 
+	var content string
 	contentWidth := min(v.width-40, 160) // Maksymalna szerokość z marginesami
 
 	switch v.mode {
-	case modeHostList:
-		content = v.renderHostList(contentWidth)
 	case modePasswordList:
 		content = v.renderPasswordList(contentWidth)
 	case modeSelectPassword:
@@ -103,8 +119,6 @@ func (v *editView) View() string {
 			} else {
 				content = v.renderPasswordEdit(contentWidth)
 			}
-		} else {
-			content = v.renderMainMenu(contentWidth)
 		}
 	}
 
@@ -127,161 +141,164 @@ func (v *editView) View() string {
 	)
 }
 
+func (v *editView) resetState() {
+	// Reset basic state
+	v.activeField = 0
+	v.errorMsg = ""
+	v.currentHost = nil
+	v.currentPassword = nil
+	v.tmpHost = nil
+	v.editing = false
+	v.mode = modeNormal
+	v.deleteConfirmation = false
+
+	// Reset lists
+	v.hosts = make([]models.Host, 0)
+	v.passwords = make([]models.Password, 0)
+	v.passwordList = make([]models.Password, 0)
+	v.selectedItemIndex = 0
+	v.selectedPasswordIndex = 0
+
+	// Reset all inputs
+	for i := range v.inputs {
+		v.inputs[i].Reset()
+		v.inputs[i].Blur()
+	}
+
+	// Refresh lists to ensure state consistency in main_view.go
+	v.model.UpdateLists()
+}
+
 func (v *editView) renderPasswordSelection(width int) string {
-	content := ui.TitleStyle.Render("Select Password for Host") + "\n\n"
+	var content strings.Builder
+	content.WriteString(ui.TitleStyle.Render("Select Password for Host") + "\n\n")
 
 	if len(v.passwordList) == 0 {
-		content += ui.ErrorStyle.Render("No passwords available. Please add a password first.") + "\n"
+		content.WriteString(ui.ErrorStyle.Render("No passwords available. Please add a password first.") + "\n")
 	} else {
 		listWidth := width - 4 // Margines wewnętrzny
 		for i, pwd := range v.passwordList {
 			prefix := "  "
 			if i == v.selectedPasswordIndex {
 				prefix = "> "
-				line := fmt.Sprintf("%s%-*s",
-					prefix,
-					listWidth-len(prefix),
-					pwd.Description)
-				content += ui.SelectedItemStyle.Render(line) + "\n"
+				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pwd.Description)
+				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
 			} else {
-				line := fmt.Sprintf("%s%-*s",
-					prefix,
-					listWidth-len(prefix),
-					pwd.Description)
-				content += line + "\n"
+				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pwd.Description)
+				content.WriteString(line + "\n")
 			}
 		}
 	}
 
-	content += "\n" + v.renderControls(
+	content.WriteString("\n" + v.renderControls(
 		Control{"ENTER", "Select"},
 		Control{"ESC", "Cancel"},
-	)
+	))
 
-	return content
-}
-
-func (v *editView) renderHostList(width int) string {
-	content := ui.TitleStyle.Render("Host List") + "\n\n"
-
-	if len(v.hosts) == 0 {
-		content += ui.DescriptionStyle.Render("No hosts available. Press 'h' to add a new host.") + "\n"
-	} else {
-		listWidth := width - 4     // Margines wewnętrzny
-		nameWidth := listWidth / 2 // Połowa szerokości na nazwę
-
-		for i, host := range v.hosts {
-			prefix := "  "
-			if i == v.selectedItemIndex {
-				prefix = "> "
-			}
-
-			// Formatuj linię z nazwą i opisem obok siebie
-			line := fmt.Sprintf("%s%-*s %-*s",
-				prefix,
-				nameWidth,
-				host.Name,
-				listWidth-nameWidth-len(prefix),
-				"("+host.Description+")")
-
-			if i == v.selectedItemIndex {
-				content += ui.SelectedItemStyle.Render(line) + "\n"
-			} else {
-				content += line + "\n"
-			}
-		}
-	}
-
-	content += "\n" + v.renderControls(
-		Control{"e", "Edit"},
-		Control{"d", "Delete"},
-		Control{"ESC", "Back"},
-	)
-
-	return content
+	return content.String()
 }
 
 func (v *editView) renderPasswordList(width int) string {
-	content := ui.TitleStyle.Render("Password List") + "\n\n"
+	var content strings.Builder
+	content.WriteString(ui.TitleStyle.Render("Password List") + "\n\n")
 
 	if len(v.passwords) == 0 {
-		content += ui.DescriptionStyle.Render("No passwords available. Press 'p' to add a new password.") + "\n"
+		content.WriteString(ui.DescriptionStyle.Render("No passwords available. Press 'p' to add a new password.") + "\n")
 	} else {
 		listWidth := width - 4
 		for i, pass := range v.passwords {
 			prefix := "  "
 			if i == v.selectedItemIndex {
 				prefix = "> "
-				line := fmt.Sprintf("%s%-*s",
-					prefix,
-					listWidth-len(prefix),
-					pass.Description)
-				content += ui.SelectedItemStyle.Render(line) + "\n"
+				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pass.Description)
+				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
 			} else {
-				line := fmt.Sprintf("%s%-*s",
-					prefix,
-					listWidth-len(prefix),
-					pass.Description)
-				content += line + "\n"
+				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pass.Description)
+				content.WriteString(line + "\n")
 			}
 		}
 	}
 
-	content += "\n" + v.renderControls(
+	content.WriteString("\n" + v.renderControls(
 		Control{"e", "Edit"},
 		Control{"d", "Delete"},
 		Control{"ESC", "Back"},
-	)
+	))
 
-	return content
+	return content.String()
+}
+
+// Helper struct for rendering controls
+type Control struct {
+	key         string
+	description string
+}
+
+func (v *editView) renderControls(controls ...Control) string {
+	var content strings.Builder
+	for i, ctrl := range controls {
+		if i > 0 {
+			content.WriteString("    ") // Zwiększony odstęp między kontrolkami
+		}
+		content.WriteString(ui.ButtonStyle.Render(ctrl.key) + " - " + ctrl.description)
+	}
+	return content.String()
 }
 
 func (v *editView) renderPasswordEdit(width int) string {
+	var content strings.Builder
+
+	// Tytuł
 	title := "Add New Password"
 	if v.currentPassword != nil {
 		title = "Edit Password"
 	}
+	content.WriteString(ui.TitleStyle.Render(title) + "\n\n")
 
-	content := ui.TitleStyle.Render(title) + "\n\n"
+	// Dopasowanie szerokości pól wejściowych
+	inputWidth := width - 8 // Marginesy i ramki
 
-	// Zmniejszamy szerokość pola wejściowego, aby pasowało do ramki
-	inputWidth := width - 8 // Odjęcie marginesów i ramki
-
-	// Ustawienia dla pól wejściowych
+	// Etykiety dla pól
 	labels := []string{
 		"Description:",
 		"Password:",
 	}
 
+	// Renderowanie pól wejściowych
 	for i, input := range v.inputs[:2] {
-		content += labels[i] + "\n"
+		content.WriteString(ui.LabelStyle.Render(labels[i]) + "\n")
+
 		inputStyle := ui.InputStyle.Width(inputWidth)
 		if i == v.activeField {
 			inputStyle = ui.SelectedItemStyle.Width(inputWidth)
 		}
-		content += inputStyle.Render(input.View()) + "\n\n"
+		content.WriteString(inputStyle.Render(input.View()) + "\n\n")
 	}
 
-	content += v.renderControls(
+	// Dodanie kontroli na dole widoku
+	content.WriteString(v.renderControls(
 		Control{"ENTER", "Save"},
 		Control{"ESC", "Cancel"},
 		Control{"↑/↓", "Navigate"},
-	)
+	))
 
-	return content
+	return content.String()
 }
 
 func (v *editView) renderHostEdit(width int) string {
+	var content strings.Builder
+
+	// Tytuł
 	title := "Add New Host"
 	if v.currentHost != nil {
 		title = "Edit Host"
 	}
+	content.WriteString(ui.TitleStyle.Render(title) + "\n\n")
 
-	content := ui.TitleStyle.Render(title) + "\n\n"
+	// Dopasowanie szerokości pól wejściowych
+	inputWidth := width - 8 // Marginesy i ramki
 
-	// Zmniejszamy szerokość pola wejściowego
-	inputWidth := width - 8 // Odjęcie marginesów i ramki
-
+	// Etykiety dla pól
 	labels := []string{
 		"Host Name:",
 		"Description:",
@@ -290,139 +307,134 @@ func (v *editView) renderHostEdit(width int) string {
 		"Port:",
 	}
 
+	// Renderowanie pól wejściowych
 	for i, input := range v.inputs[:5] {
-		content += labels[i] + "\n"
+		content.WriteString(ui.LabelStyle.Render(labels[i]) + "\n")
+
 		inputStyle := ui.InputStyle.Width(inputWidth)
 		if i == v.activeField {
 			inputStyle = ui.SelectedItemStyle.Width(inputWidth)
 		}
-		content += inputStyle.Render(input.View()) + "\n\n"
+		content.WriteString(inputStyle.Render(input.View()) + "\n\n")
 	}
 
-	content += v.renderControls(
+	// Dodanie kontroli na dole widoku
+	content.WriteString(v.renderControls(
 		Control{"ENTER", "Save"},
 		Control{"ESC", "Cancel"},
 		Control{"↑/↓", "Navigate"},
-	)
+	))
 
-	return content
+	return content.String()
 }
-
-func (v *editView) renderMainMenu(width int) string {
-	content := ui.TitleStyle.Render("Edit Mode") + "\n\n"
-
-	menuItems := []struct {
-		key, description string
-	}{
-		{"h", "Add new host"},
-		{"H", "Host list"},
-		{"p", "Add new password"},
-		{"P", "Password list"},
-		{"ESC", "Back"},
-	}
-
-	menuWidth := width - 4
-	for _, item := range menuItems {
-		line := fmt.Sprintf("%-*s", menuWidth,
-			fmt.Sprintf("%s - %s",
-				ui.ButtonStyle.Render(item.key),
-				item.description))
-		content += line + "\n"
-	}
-
-	return content
-}
-
-// Helper struct for rendering controls
-type Control struct {
-	key, description string
-}
-
-func (v *editView) renderControls(controls ...Control) string {
-	var content string
-	for i, ctrl := range controls {
-		if i > 0 {
-			content += "    "
-		}
-		content += ui.ButtonStyle.Render(ctrl.key) + " - " + ctrl.description
-	}
-	return content
-}
-
-// internal/ui/views/edit.go - część 3
-
-// internal/ui/views/edit.go
 
 func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// Aktualizuj rozmiar okna
 		v.width = msg.Width
 		v.height = msg.Height
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
+
 	case tea.KeyMsg:
-		// Najpierw sprawdzamy czy jesteśmy w trybie wprowadzania tekstu
+		// Sprawdź, czy jesteśmy w trybie edycji
 		if v.editing && v.mode != modeSelectPassword &&
 			v.mode != modeHostList && v.mode != modePasswordList {
-			// Obsługujemy tylko klawisze specjalne w trybie edycji
+			// Obsługuj specjalne klawisze w trybie edycji
 			switch msg.String() {
 			case "esc":
-				return v.handleEscapeKey()
+				model, cmd := v.handleEscapeKey()
+				if _, ok := model.(*editView); !ok {
+					// Jeśli zwrócony model nie jest editView, zwróć go
+					return model, cmd
+				}
+				// W przeciwnym razie pozostań w obecnym widoku
+				return v, cmd
+
 			case "enter":
-				return v.handleEnterKey()
+				model, cmd := v.handleEnterKey()
+				if _, ok := model.(*editView); !ok {
+					// Jeśli zwrócony model nie jest editView, zwróć go
+					return model, cmd
+				}
+				return v, cmd
+
 			case "tab", "shift+tab", "up", "down":
 				return v.handleNavigationKey(msg.String())
+
 			default:
-				// Przekazujemy wszystkie inne klawisze do aktywnego pola tekstowego
+				// Przekazanie innych klawiszy do aktywnego pola tekstowego
 				v.inputs[v.activeField], cmd = v.inputs[v.activeField].Update(msg)
 				return v, cmd
 			}
 		}
 
-		// Jeśli nie jesteśmy w trybie edycji, obsługujemy wszystkie klawisze normalnie
+		// Obsługuj klawisze w normalnym trybie
 		switch msg.String() {
 		case "esc":
-			return v.handleEscapeKey()
+			model, cmd := v.handleEscapeKey()
+			if _, ok := model.(*editView); !ok {
+				// Jeśli zwrócony model nie jest editView, zwróć go
+				return model, cmd
+			}
+			return v, cmd
+
 		case "tab", "shift+tab", "up", "down":
 			return v.handleNavigationKey(msg.String())
+
 		case "enter":
-			return v.handleEnterKey()
-		case "h", "H", "p", "P":
-			return v.handleModeKey(msg.String())
+			model, cmd := v.handleEnterKey()
+			if _, ok := model.(*editView); !ok {
+				// Jeśli zwrócony model nie jest editView, zwróć go
+				return model, cmd
+			}
+			return v, cmd
+
 		case "e", "d":
-			return v.handleActionKey(msg.String())
+			model, cmd := v.handleActionKey(msg.String())
+			if _, ok := model.(*editView); !ok {
+				// Jeśli zwrócony model nie jest editView, zwróć go
+				return model, cmd
+			}
+			return v, cmd
 		}
 	}
 
 	return v, cmd
 }
 
+// internal/ui/views/edit.go
 func (v *editView) handleEscapeKey() (tea.Model, tea.Cmd) {
 	switch v.mode {
 	case modeSelectPassword:
 		v.mode = modeNormal
 		v.editing = false
 		v.resetState()
-		return v, nil
+		v.model.SetActiveView(ui.ViewMain)
+		return NewMainView(v.model), nil
 
 	case modeHostList, modePasswordList:
 		v.mode = modeNormal
 		v.editing = false
 		v.resetState()
-		return v, nil
+		v.model.SetActiveView(ui.ViewMain)
+		return NewMainView(v.model), nil
 
 	default:
 		if !v.editing {
 			v.model.SetStatus("", false)
 			v.model.SetActiveView(ui.ViewMain)
 			v.resetState()
-			return v, nil
+			return NewMainView(v.model), nil
 		}
+
 		v.editing = false
 		v.resetState()
-		return v, nil
+		v.model.SetActiveView(ui.ViewMain)
+		return NewMainView(v.model), nil
 	}
 }
 
@@ -507,50 +519,8 @@ func (v *editView) navigateFields(key string) {
 	}
 }
 
-func (v *editView) handleModeKey(key string) (tea.Model, tea.Cmd) {
-	if v.editing {
-		return v, nil
-	}
-
-	switch key {
-	case "h":
-		v.editing = true
-		v.editingHost = true
-		v.initializeHostInputs()
-
-	case "H":
-		v.mode = modeHostList
-		v.editing = true
-		v.hosts = v.model.GetHosts()
-		v.selectedItemIndex = 0
-		v.deleteConfirmation = false
-
-	case "p":
-		v.editing = true
-		v.editingHost = false
-		v.initializePasswordInputs()
-
-	case "P":
-		v.mode = modePasswordList
-		v.editing = true
-		v.passwords = v.model.GetPasswords()
-		v.selectedItemIndex = 0
-		v.deleteConfirmation = false
-	}
-
-	return v, nil
-}
-
-// internal/ui/views/edit.go - część 4
-
 func (v *editView) handleActionKey(key string) (tea.Model, tea.Cmd) {
 	switch v.mode {
-	case modeHostList:
-		if len(v.hosts) == 0 {
-			return v, nil
-		}
-		return v.handleHostListAction(key)
-
 	case modePasswordList:
 		if len(v.passwords) == 0 {
 			return v, nil
@@ -560,46 +530,10 @@ func (v *editView) handleActionKey(key string) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-func (v *editView) handleHostListAction(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "e":
-		v.currentHost = &v.hosts[v.selectedItemIndex]
-		v.editingHost = true
-		v.mode = modeNormal
-		v.initializeHostInputs()
-		return v, nil
-
-	case "d":
-		if !v.deleteConfirmation {
-			v.errorMsg = "Press 'd' again to confirm deletion"
-			v.deleteConfirmation = true
-			return v, nil
-		}
-
-		host := v.hosts[v.selectedItemIndex]
-		if err := v.model.DeleteHost(host.Name); err != nil {
-			v.errorMsg = fmt.Sprint(err)
-		} else {
-			if err := v.model.SaveConfig(); err != nil {
-				v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
-				return v, nil
-			}
-			v.model.UpdateLists()
-			v.hosts = v.model.GetHosts()
-			if v.selectedItemIndex >= len(v.hosts) {
-				v.selectedItemIndex = len(v.hosts) - 1
-			}
-			v.model.SetStatus("Host deleted successfully", false)
-		}
-		v.deleteConfirmation = false
-		return v, nil
-	}
-	return v, nil
-}
-
 func (v *editView) handlePasswordListAction(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "e":
+		// Edytuj wybrane hasło
 		v.currentPassword = &v.passwords[v.selectedItemIndex]
 		v.editingHost = false
 		v.mode = modeNormal
@@ -613,10 +547,12 @@ func (v *editView) handlePasswordListAction(key string) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
+		// Usuń wybrane hasło
 		password := v.passwords[v.selectedItemIndex]
 		if err := v.model.DeletePassword(password.Description); err != nil {
 			v.errorMsg = fmt.Sprint(err)
 		} else {
+			// Zapisz konfigurację po usunięciu hasła
 			if err := v.model.SaveConfig(); err != nil {
 				v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
 				return v, nil
@@ -629,6 +565,9 @@ func (v *editView) handlePasswordListAction(key string) (tea.Model, tea.Cmd) {
 			v.model.SetStatus("Password deleted successfully", false)
 		}
 		v.deleteConfirmation = false
+
+		// Przekierowanie na widok główny po usunięciu
+		v.model.SetActiveView(ui.ViewMain)
 		return v, nil
 	}
 	return v, nil
@@ -637,7 +576,14 @@ func (v *editView) handlePasswordListAction(key string) (tea.Model, tea.Cmd) {
 func (v *editView) handleEnterKey() (tea.Model, tea.Cmd) {
 	switch {
 	case v.mode == modeSelectPassword:
-		return v.saveHostWithPassword()
+		model, cmd := v.saveHostWithPassword()
+		if _, ok := model.(*editView); ok {
+			// Jeśli wystąpił błąd, pozostań w widoku edycji
+			return model, cmd
+		}
+		v.model.SetActiveView(ui.ViewMain)
+		v.model.UpdateLists()
+		return model, cmd
 
 	case v.mode == modeHostList, v.mode == modePasswordList:
 		return v, nil
@@ -649,15 +595,37 @@ func (v *editView) handleEnterKey() (tea.Model, tea.Cmd) {
 		return v, nil
 
 	default:
-		return v.handleSave()
+		model, cmd := v.handleSave()
+		if _, ok := model.(*editView); ok {
+			// Jeśli wystąpił błąd, pozostań w widoku edycji
+			return model, cmd
+		}
+		v.model.UpdateLists()
+		return model, cmd
 	}
 }
 
 func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 	if v.editingHost {
-		return v.validateAndSaveHost()
+		// Zapisz host i przejdź do widoku głównego
+		model, cmd := v.validateAndSaveHost()
+		if _, ok := model.(*editView); ok {
+			// Jeśli wystąpił błąd, pozostań w widoku edycji
+			return model, cmd
+		}
+		// Jeśli walidacja przeszła pomyślnie, zostaniemy w tym samym widoku
+		// aby wybrać hasło
+		return model, cmd
 	}
-	return v.validateAndSavePassword()
+
+	// Zapisz hasło i przejdź do widoku głównego
+	model, cmd := v.validateAndSavePassword()
+	if _, ok := model.(*editView); ok {
+		// Jeśli wystąpił błąd, pozostań w widoku edycji
+		return model, cmd
+	}
+	v.model.SetActiveView(ui.ViewMain)
+	return model, cmd
 }
 
 func (v *editView) validateAndSaveHost() (tea.Model, tea.Cmd) {
@@ -674,7 +642,7 @@ func (v *editView) validateAndSaveHost() (tea.Model, tea.Cmd) {
 		return v, nil
 	}
 
-	// Initialize temporary host
+	// Zainicjalizuj tymczasowego hosta
 	v.tmpHost = &models.Host{
 		Name:        v.inputs[0].Value(),
 		Description: v.inputs[1].Value(),
@@ -683,7 +651,7 @@ func (v *editView) validateAndSaveHost() (tea.Model, tea.Cmd) {
 		Port:        v.inputs[4].Value(),
 	}
 
-	// Switch to password selection mode
+	// Przejdź do trybu wyboru hasła
 	v.mode = modeSelectPassword
 	v.passwordList = passwords
 	v.selectedPasswordIndex = 0
@@ -697,14 +665,14 @@ func (v *editView) validateAndSavePassword() (tea.Model, tea.Cmd) {
 		return v, nil
 	}
 
-	// Create new password with encryption
+	// Utworzenie nowego hasła z szyfrowaniem
 	password, err := models.NewPassword(v.inputs[0].Value(), v.inputs[1].Value(), v.model.GetCipher())
 	if err != nil {
 		v.errorMsg = fmt.Sprintf("Failed to create password: %v", err)
 		return v, nil
 	}
 
-	// Update or add password
+	// Aktualizacja lub dodanie hasła
 	var opErr interface{}
 	if v.currentPassword != nil {
 		opErr = v.model.UpdatePassword(v.currentPassword.Description, password)
@@ -717,25 +685,27 @@ func (v *editView) validateAndSavePassword() (tea.Model, tea.Cmd) {
 		return v, nil
 	}
 
-	// Save configuration
+	// Zapis konfiguracji
 	if err := v.model.SaveConfig(); err != nil {
 		v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
 		return v, nil
 	}
 
-	// Update UI state
+	// Aktualizacja stanu UI
 	v.model.UpdateLists()
 	v.model.SetStatus("Password saved successfully", false)
 	v.editing = false
 	v.resetState()
-	return v, nil
-}
 
-// internal/ui/views/edit.go - część 5
+	// Przekierowanie na widok główny
+	v.model.SetActiveView(ui.ViewMain)
+	return NewMainView(v.model), nil
+}
 
 func (v *editView) saveHostWithPassword() (tea.Model, tea.Cmd) {
 	v.tmpHost.PasswordID = v.selectedPasswordIndex
 
+	// Aktualizacja lub dodanie hosta
 	var err interface{}
 	if v.currentHost != nil {
 		err = v.model.UpdateHost(v.currentHost.Name, v.tmpHost)
@@ -748,17 +718,22 @@ func (v *editView) saveHostWithPassword() (tea.Model, tea.Cmd) {
 		return v, nil
 	}
 
+	// Zapis konfiguracji
 	if err := v.model.SaveConfig(); err != nil {
 		v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
 		return v, nil
 	}
 
+	// Aktualizacja stanu UI
 	v.mode = modeNormal
 	v.model.UpdateLists()
 	v.model.SetStatus("Host saved successfully", false)
 	v.editing = false
 	v.resetState()
-	return v, nil
+
+	// Przekierowanie na widok główny
+	v.model.SetActiveView(ui.ViewMain)
+	return NewMainView(v.model), nil
 }
 
 func (v *editView) initializeHostInputs() {
@@ -811,31 +786,6 @@ func (v *editView) initializePasswordInputs() {
 	// Focus the first field
 	v.activeField = 0
 	v.inputs[0].Focus()
-}
-
-func (v *editView) resetState() {
-	// Reset basic state
-	v.activeField = 0
-	v.errorMsg = ""
-	v.currentHost = nil
-	v.currentPassword = nil
-	v.tmpHost = nil
-	v.editing = false
-	v.mode = modeNormal
-	v.deleteConfirmation = false
-
-	// Reset lists
-	v.hosts = nil
-	v.passwords = nil
-	v.passwordList = nil
-	v.selectedItemIndex = 0
-	v.selectedPasswordIndex = 0
-
-	// Reset all inputs
-	for i := range v.inputs {
-		v.inputs[i].Reset()
-		v.inputs[i].Blur()
-	}
 }
 
 // Helper function to check if a field contains only digits

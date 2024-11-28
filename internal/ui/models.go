@@ -182,8 +182,6 @@ func (m Model) View() string {
 
 	var view string
 	switch m.activeView {
-	case ViewMain:
-		view = m.viewMain()
 	case ViewHostList:
 		view = m.hostList.View()
 	case ViewPasswordList:
@@ -200,17 +198,6 @@ func (m Model) View() string {
 	}
 
 	return view
-}
-
-// viewMain renderuje główny widok
-func (m Model) viewMain() string {
-	return WindowStyle.Render(
-		TitleStyle.Render("SSH Manager") + "\n\n" +
-			"c - Połącz\n" +
-			"e - Edytuj\n" +
-			"t - Transfer plików\n" +
-			"q - Wyjście",
-	)
 }
 
 func NewModel() *Model {
