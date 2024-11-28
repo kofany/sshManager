@@ -14,4 +14,5 @@ type Host struct {
 type Config struct {
 	Hosts     []Host     `json:"hosts"`
 	Passwords []Password `json:"passwords"`
+	Keys      []Key      `json:"keys"` // Nowa linia
 }

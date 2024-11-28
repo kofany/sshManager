@@ -1430,7 +1430,7 @@ func (v *transferView) renderShortcuts() string {
 	t := table.New()
 
 	columns := []table.Column{
-		{Title: "Switch panel", Width: 12},
+		{Title: "Switch Panel", Width: 12},
 		{Title: "Select", Width: 8},
 		{Title: "Copy", Width: 14},
 		{Title: "Rename", Width: 14},
@@ -1455,11 +1455,19 @@ func (v *transferView) renderShortcuts() string {
 	}
 	t.SetRows(rows)
 
-	// Ustawiamy style
+	// Set styles similar to renderCommandBar
 	s := table.DefaultStyles()
-	t.SetStyles(s)
+	s.Header = s.Header.
+		Foreground(ui.Subtle).
+		Bold(true).
+		Padding(0, 0)
 
-	// Ustawiamy wysokość tabeli na 2 (nagłówek + jeden wiersz)
+	s.Cell = s.Cell.
+		Foreground(ui.Special).
+		Bold(true).
+		Padding(0, 0)
+
+	t.SetStyles(s)
 	t.SetHeight(2)
 
 	return t.View()

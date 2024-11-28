@@ -17,6 +17,8 @@ const (
 	PopupDelete
 	PopupHostKey
 	PopupMessage
+	PopupKeyEdit // Nowy typ
+
 )
 
 type Popup struct {
@@ -75,7 +77,7 @@ func (p *Popup) Render() string {
 	var keys string
 	switch p.Type {
 	case PopupDelete, PopupHostKey:
-		keys = "y - Yes, n - No" // Translated from "y - Potwierdź, n - Anuluj, ESC - Anuluj"
+		keys = "y - Yes, n - No"
 	case PopupMessage:
 		keys = "ESC/ENTER - Close"
 	default:

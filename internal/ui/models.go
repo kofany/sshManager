@@ -418,7 +418,8 @@ func (m *Model) UpdateHost(oldName string, host *models.Host) interface{} {
 
 // AddPassword dodaje nowe hasło
 
-func (m *Model) AddPassword(password *models.Password) interface{} {
+// AddPassword dodaje nowe hasło
+func (m *Model) AddPassword(password *models.Password) error {
 	// Sprawdzenie czy hasło o takim opisie już istnieje
 	for _, p := range m.config.GetPasswords() {
 		if p.Description == password.Description {
@@ -440,7 +441,7 @@ func (m *Model) AddPassword(password *models.Password) interface{} {
 }
 
 // UpdatePassword aktualizuje istniejące hasło
-func (m *Model) UpdatePassword(oldDesc string, password *models.Password) interface{} {
+func (m *Model) UpdatePassword(oldDesc string, password *models.Password) error {
 	for i, p := range m.passwords {
 		if p.Description == oldDesc {
 			m.passwords[i] = *password
@@ -604,4 +605,66 @@ func (m *Model) GetSelectedPaths() []string {
 
 func (m *Model) HasSelectedItems() bool {
 	return len(m.GetSelectedPaths()) > 0
+}
+
+// AddKey dodaje nowy klucz
+func (m *Model) AddKey(key *models.Key) error {
+	if err := m.config.AddKey(*key); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpdateKey aktualizuje istniejący klucz
+func (m *Model) UpdateKey(oldDesc string, key *models.Key) error {
+	// Znajdź indeks klucza o podanym opisie
+	keyIndex := -1
+	for i, k := range m.config.GetKeys() {
+		if k.Description == oldDesc {
+			keyIndex = i
+			break
+		}
+	}
+
+	if keyIndex == -1 {
+		return fmt.Errorf("key with description '%s' not found", oldDesc)
+	}
+
+	if err := m.config.UpdateKey(keyIndex, *key); err != nil {
+		return err
+	}
+	return nil
+}
+
+// GetKeys zwraca listę kluczy
+func (m *Model) GetKeys() []models.Key {
+	return m.config.GetKeys()
+}
+
+// DeleteKey usuwa klucz o podanym opisie
+func (m *Model) DeleteKey(description string) error {
+	if description == "" {
+		return fmt.Errorf("key description cannot be empty")
+	}
+
+	// Znajdź klucz po opisie
+	keyIndex := -1
+	keys := m.config.GetKeys()
+	for i, k := range keys {
+		if k.Description == description {
+			keyIndex = i
+			break
+		}
+	}
+
+	if keyIndex == -1 {
+		return fmt.Errorf("key '%s' not found", description)
+	}
+
+	// Deleguj usuwanie do config.Manager
+	if err := m.config.DeleteKey(keyIndex); err != nil {
+		return fmt.Errorf("failed to delete key '%s': %v", description, err)
+	}
+
+	return nil
 }

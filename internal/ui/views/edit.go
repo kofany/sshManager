@@ -21,6 +21,8 @@ const (
 	modeSelectPassword
 	modeHostList
 	modePasswordList
+	modeKeyEdit // Nowy tryb dla edycji kluczy SSH
+	modeKeyList // Nowy tryb dla listy kluczy
 )
 
 type editView struct {
@@ -40,8 +42,10 @@ type editView struct {
 	passwords             []models.Password
 	selectedItemIndex     int
 	deleteConfirmation    bool
-	width                 int // Dodane
-	height                int // Dodane
+	width                 int          // Dodane
+	height                int          // Dodane
+	currentKey            *models.Key  // Dodane
+	keys                  []models.Key // Dodane
 }
 
 func NewEditView(model *ui.Model) *editView {
@@ -61,6 +65,7 @@ func NewEditView(model *ui.Model) *editView {
 		hosts:                 make([]models.Host, 0),
 		passwords:             make([]models.Password, 0),
 		passwordList:          make([]models.Password, 0),
+		keys:                  make([]models.Key, 0),
 	}
 
 	// Initialize text inputs
@@ -98,20 +103,18 @@ func (v *editView) Init() tea.Cmd {
 }
 
 func (v *editView) View() string {
-	if v.width == 0 || v.height == 0 {
-		// Zabezpieczenie przed zerowymi wymiarami
-		v.width = v.model.GetTerminalWidth()
-		v.height = v.model.GetTerminalHeight()
-	}
-
 	var content string
-	contentWidth := min(v.width-40, 160) // Maksymalna szerokość z marginesami
+	contentWidth := min(v.width-40, 160)
 
 	switch v.mode {
-	case modePasswordList:
+	case modePasswordList, modeKeyList: // Dodajemy modeKeyList do tego samego case'a
 		content = v.renderPasswordList(contentWidth)
 	case modeSelectPassword:
-		content = v.renderPasswordSelection(contentWidth)
+		content = v.renderAuthSelection(contentWidth)
+	case modeKeyEdit: // Dodajemy osobny case dla edycji klucza
+		if v.editing {
+			content = v.renderKeyEdit(contentWidth)
+		}
 	default:
 		if v.editing {
 			if v.editingHost {
@@ -169,14 +172,24 @@ func (v *editView) resetState() {
 	v.model.UpdateLists()
 }
 
-func (v *editView) renderPasswordSelection(width int) string {
+func (v *editView) renderAuthSelection(width int) string {
 	var content strings.Builder
-	content.WriteString(ui.TitleStyle.Render("Select Password for Host") + "\n\n")
+	content.WriteString(ui.TitleStyle.Render("Select Authentication Method") + "\n\n")
 
-	if len(v.passwordList) == 0 {
-		content.WriteString(ui.ErrorStyle.Render("No passwords available. Please add a password first.") + "\n")
-	} else {
-		listWidth := width - 4 // Margines wewnętrzny
+	// Pobieramy listy haseł i kluczy
+	v.passwordList = v.model.GetPasswords()
+	v.keys = v.model.GetKeys()
+
+	if len(v.passwordList) == 0 && len(v.keys) == 0 {
+		content.WriteString(ui.ErrorStyle.Render("No authentication methods available.\nPlease add a password or SSH key first.") + "\n")
+		return content.String()
+	}
+
+	listWidth := width - 4 // Margines wewnętrzny
+
+	// Najpierw wyświetlamy hasła
+	if len(v.passwordList) > 0 {
+		content.WriteString(ui.LabelStyle.Render("Passwords:") + "\n")
 		for i, pwd := range v.passwordList {
 			prefix := "  "
 			if i == v.selectedPasswordIndex {
@@ -185,6 +198,26 @@ func (v *editView) renderPasswordSelection(width int) string {
 				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
 			} else {
 				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pwd.Description)
+				content.WriteString(line + "\n")
+			}
+		}
+	}
+
+	// Następnie wyświetlamy klucze SSH
+	if len(v.keys) > 0 {
+		if len(v.passwordList) > 0 {
+			content.WriteString("\n") // Odstęp między sekcjami
+		}
+		content.WriteString(ui.LabelStyle.Render("SSH Keys:") + "\n")
+		startIndex := len(v.passwordList)
+		for i, key := range v.keys {
+			prefix := "  "
+			if i+startIndex == v.selectedPasswordIndex {
+				prefix = "> "
+				line := fmt.Sprintf("%-*s", listWidth-1, prefix+key.Description)
+				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
+			} else {
+				line := fmt.Sprintf("%-*s", listWidth-1, prefix+key.Description)
 				content.WriteString(line + "\n")
 			}
 		}
@@ -200,26 +233,63 @@ func (v *editView) renderPasswordSelection(width int) string {
 
 func (v *editView) renderPasswordList(width int) string {
 	var content strings.Builder
-	content.WriteString(ui.TitleStyle.Render("Password List") + "\n\n")
+	var items []struct {
+		description string
+		isSelected  bool
+	}
 
-	if len(v.passwords) == 0 {
-		content.WriteString(ui.DescriptionStyle.Render("No passwords available. Press 'p' to add a new password.") + "\n")
+	// Przygotowanie danych w zależności od trybu
+	listWidth := width - 4
+	if v.mode == modeKeyList {
+		content.WriteString(ui.TitleStyle.Render("SSH Keys") + "\n\n")
+		if len(v.keys) == 0 {
+			content.WriteString(ui.DescriptionStyle.Render("No SSH keys available. Press 'a' to add a new key.") + "\n")
+		} else {
+			// Przygotuj listę kluczy
+			for i, key := range v.keys {
+				items = append(items, struct {
+					description string
+					isSelected  bool
+				}{
+					description: key.Description,
+					isSelected:  i == v.selectedItemIndex,
+				})
+			}
+		}
 	} else {
-		listWidth := width - 4
-		for i, pass := range v.passwords {
-			prefix := "  "
-			if i == v.selectedItemIndex {
-				prefix = "> "
-				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pass.Description)
-				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
-			} else {
-				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pass.Description)
-				content.WriteString(line + "\n")
+		content.WriteString(ui.TitleStyle.Render("Password List") + "\n\n")
+		if len(v.passwords) == 0 {
+			content.WriteString(ui.DescriptionStyle.Render("No passwords available. Press 'a' to add a new password.") + "\n")
+		} else {
+			// Przygotuj listę haseł
+			for i, pass := range v.passwords {
+				items = append(items, struct {
+					description string
+					isSelected  bool
+				}{
+					description: pass.Description,
+					isSelected:  i == v.selectedItemIndex,
+				})
 			}
 		}
 	}
 
+	// Renderowanie listy (wspólne dla obu trybów)
+	for _, item := range items {
+		prefix := "  "
+		if item.isSelected {
+			prefix = "> "
+			line := fmt.Sprintf("%-*s", listWidth-1, prefix+item.description)
+			content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
+		} else {
+			line := fmt.Sprintf("%-*s", listWidth-1, prefix+item.description)
+			content.WriteString(line + "\n")
+		}
+	}
+
+	// Wspólne kontrolki dla obu trybów
 	content.WriteString("\n" + v.renderControls(
+		Control{"a", "Add"},
 		Control{"e", "Edit"},
 		Control{"d", "Delete"},
 		Control{"ESC", "Back"},
@@ -333,31 +403,34 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		// Aktualizuj rozmiar okna
 		v.width = msg.Width
 		v.height = msg.Height
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
 
 	case tea.KeyMsg:
+		if v.mode == modePasswordList || v.mode == modeKeyList {
+			switch msg.String() {
+			case "tab", "shift+tab", "up", "down":
+				return v.handleNavigationKey(msg.String())
+			}
+		}
+
 		// Sprawdź, czy jesteśmy w trybie edycji
 		if v.editing && v.mode != modeSelectPassword &&
-			v.mode != modeHostList && v.mode != modePasswordList {
-			// Obsługuj specjalne klawisze w trybie edycji
+			v.mode != modeHostList && v.mode != modePasswordList &&
+			v.mode != modeKeyList {
 			switch msg.String() {
 			case "esc":
 				model, cmd := v.handleEscapeKey()
 				if _, ok := model.(*editView); !ok {
-					// Jeśli zwrócony model nie jest editView, zwróć go
 					return model, cmd
 				}
-				// W przeciwnym razie pozostań w obecnym widoku
 				return v, cmd
 
 			case "enter":
 				model, cmd := v.handleEnterKey()
 				if _, ok := model.(*editView); !ok {
-					// Jeśli zwrócony model nie jest editView, zwróć go
 					return model, cmd
 				}
 				return v, cmd
@@ -366,18 +439,15 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v.handleNavigationKey(msg.String())
 
 			default:
-				// Przekazanie innych klawiszy do aktywnego pola tekstowego
 				v.inputs[v.activeField], cmd = v.inputs[v.activeField].Update(msg)
 				return v, cmd
 			}
 		}
-
 		// Obsługuj klawisze w normalnym trybie
 		switch msg.String() {
 		case "esc":
 			model, cmd := v.handleEscapeKey()
 			if _, ok := model.(*editView); !ok {
-				// Jeśli zwrócony model nie jest editView, zwróć go
 				return model, cmd
 			}
 			return v, cmd
@@ -388,21 +458,104 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			model, cmd := v.handleEnterKey()
 			if _, ok := model.(*editView); !ok {
-				// Jeśli zwrócony model nie jest editView, zwróć go
 				return model, cmd
 			}
 			return v, cmd
 
-		case "e", "d":
+		case "e":
+			if v.mode == modePasswordList || v.mode == modeKeyList {
+				if v.mode == modePasswordList && len(v.passwords) > 0 {
+					v.currentPassword = &v.passwords[v.selectedItemIndex]
+					v.editingHost = false
+					v.mode = modeNormal
+					v.editing = true
+					v.initializePasswordInputs()
+				} else if v.mode == modeKeyList && len(v.keys) > 0 {
+					v.currentKey = &v.keys[v.selectedItemIndex]
+					v.mode = modeKeyEdit
+					v.editing = true
+					v.initializeKeyInputs()
+				}
+			}
 			model, cmd := v.handleActionKey(msg.String())
 			if _, ok := model.(*editView); !ok {
-				// Jeśli zwrócony model nie jest editView, zwróć go
 				return model, cmd
 			}
 			return v, cmd
+		case "a":
+			// Ujednolicona obsługa dodawania dla obu list
+			if v.mode == modePasswordList {
+				v.currentPassword = nil
+				v.editingHost = false
+				v.mode = modeNormal
+				v.editing = true
+				v.initializePasswordInputs()
+				return v, nil
+			} else if v.mode == modeKeyList {
+				v.currentKey = nil
+				v.mode = modeKeyEdit
+				v.editing = true
+				v.initializeKeyInputs()
+				return v, nil
+			}
+
+		case "d":
+			// Ujednolicona obsługa usuwania dla obu list
+			if v.mode == modePasswordList || v.mode == modeKeyList {
+				// Sprawdzenie czy lista jest pusta
+				isEmpty := (v.mode == modePasswordList && len(v.passwords) == 0) ||
+					(v.mode == modeKeyList && len(v.keys) == 0)
+				if isEmpty {
+					return v, nil
+				}
+
+				// Obsługa potwierdzenia usunięcia
+				if !v.deleteConfirmation {
+					v.errorMsg = "Press 'd' again to confirm deletion"
+					v.deleteConfirmation = true
+					return v, nil
+				}
+
+				// Wykonanie usunięcia
+				var result interface{}
+				if v.mode == modePasswordList {
+					password := v.passwords[v.selectedItemIndex]
+					result = v.model.DeletePassword(password.Description)
+				} else {
+					key := v.keys[v.selectedItemIndex]
+					result = v.model.DeleteKey(key.Description)
+				}
+
+				// Obsługa błędów i aktualizacja stanu
+				if result != nil {
+					v.errorMsg = fmt.Sprint(result)
+				} else {
+					if err := v.model.SaveConfig(); err != nil {
+						v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
+						return v, nil
+					}
+					v.model.UpdateLists()
+
+					// Aktualizacja odpowiedniej listy
+					if v.mode == modePasswordList {
+						v.passwords = v.model.GetPasswords()
+						if v.selectedItemIndex >= len(v.passwords) {
+							v.selectedItemIndex = len(v.passwords) - 1
+						}
+						v.model.SetStatus("Password deleted successfully", false)
+					} else {
+						v.keys = v.model.GetKeys()
+						if v.selectedItemIndex >= len(v.keys) {
+							v.selectedItemIndex = len(v.keys) - 1
+						}
+						v.model.SetStatus("Key deleted successfully", false)
+					}
+				}
+				v.deleteConfirmation = false
+			}
+			return v, nil
 		}
 	}
-
 	return v, cmd
 }
 
@@ -444,7 +597,7 @@ func (v *editView) handleNavigationKey(key string) (tea.Model, tea.Cmd) {
 		v.navigatePasswordSelection(key)
 		return v, nil
 
-	case modeHostList, modePasswordList:
+	case modePasswordList, modeKeyList:
 		v.navigateList(key)
 		return v, nil
 
@@ -453,7 +606,6 @@ func (v *editView) handleNavigationKey(key string) (tea.Model, tea.Cmd) {
 			v.navigateFields(key)
 		}
 	}
-
 	return v, nil
 }
 
@@ -472,9 +624,14 @@ func (v *editView) navigatePasswordSelection(key string) {
 }
 
 func (v *editView) navigateList(key string) {
-	maxItems := len(v.hosts)
-	if v.mode == modePasswordList {
+	var maxItems int
+	switch v.mode {
+	case modePasswordList:
 		maxItems = len(v.passwords)
+	case modeKeyList:
+		maxItems = len(v.keys)
+	default:
+		maxItems = len(v.hosts)
 	}
 
 	if key == "up" || key == "shift+tab" {
@@ -497,8 +654,13 @@ func (v *editView) navigateFields(key string) {
 		v.activeField++
 	}
 
-	maxFields := 5 // For host editing
-	if !v.editingHost {
+	var maxFields int
+	switch {
+	case v.editingHost:
+		maxFields = 5 // For host editing
+	case v.mode == modeKeyEdit:
+		maxFields = 3 // For key editing
+	default:
 		maxFields = 2 // For password editing
 	}
 
@@ -607,25 +769,84 @@ func (v *editView) handleEnterKey() (tea.Model, tea.Cmd) {
 
 func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 	if v.editingHost {
-		// Zapisz host i przejdź do widoku głównego
+		// Save host and handle accordingly
 		model, cmd := v.validateAndSaveHost()
 		if _, ok := model.(*editView); ok {
-			// Jeśli wystąpił błąd, pozostań w widoku edycji
+			// If there was an error, stay in edit view
 			return model, cmd
 		}
-		// Jeśli walidacja przeszła pomyślnie, zostaniemy w tym samym widoku
-		// aby wybrać hasło
+		// If validation passed, proceed as needed
 		return model, cmd
 	}
 
-	// Zapisz hasło i przejdź do widoku głównego
-	model, cmd := v.validateAndSavePassword()
-	if _, ok := model.(*editView); ok {
-		// Jeśli wystąpił błąd, pozostań w widoku edycji
-		return model, cmd
+	if v.mode == modeKeyEdit {
+		// Validation of key fields
+		if err := v.validateKeyFields(); err != nil {
+			v.errorMsg = err.Error()
+			return v, nil
+		}
+		// Create new key
+		key, err := models.NewKey(
+			v.inputs[0].Value(),
+			v.inputs[1].Value(),
+			v.inputs[2].Value(),
+			v.model.GetCipher(),
+		)
+		if err != nil {
+			v.errorMsg = err.Error()
+			return v, nil
+		}
+		// Update or add key
+		if v.currentKey != nil {
+			err = v.model.UpdateKey(v.currentKey.Description, key)
+		} else {
+			err = v.model.AddKey(key)
+		}
+		if err != nil {
+			v.errorMsg = err.Error()
+			return v, nil
+		}
+	} else {
+		// Validation of password fields
+		if err := v.validatePasswordFields(); err != nil {
+			v.errorMsg = err.Error()
+			return v, nil
+		}
+		// Creating new password with encryption
+		password, err := models.NewPassword(v.inputs[0].Value(), v.inputs[1].Value(), v.model.GetCipher())
+		if err != nil {
+			v.errorMsg = fmt.Sprintf("Failed to create password: %v", err)
+			return v, nil
+		}
+		// Update or add password
+		if v.currentPassword != nil {
+			if err := v.model.UpdatePassword(v.currentPassword.Description, password); err != nil {
+				v.errorMsg = fmt.Sprint(err)
+				return v, nil
+			}
+		} else {
+			if err := v.model.AddPassword(password); err != nil {
+				v.errorMsg = fmt.Sprint(err)
+				return v, nil
+			}
+		}
 	}
+
+	// Save configuration
+	if err := v.model.SaveConfig(); err != nil {
+		v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
+		return v, nil
+	}
+
+	// Update UI state
+	v.model.UpdateLists()
+	v.model.SetStatus("Password saved successfully", false)
+	v.editing = false
+	v.resetState()
+
+	// Redirect to main view
 	v.model.SetActiveView(ui.ViewMain)
-	return model, cmd
+	return NewMainView(v.model), nil
 }
 
 func (v *editView) validateAndSaveHost() (tea.Model, tea.Cmd) {
@@ -656,50 +877,6 @@ func (v *editView) validateAndSaveHost() (tea.Model, tea.Cmd) {
 	v.passwordList = passwords
 	v.selectedPasswordIndex = 0
 	return v, nil
-}
-
-func (v *editView) validateAndSavePassword() (tea.Model, tea.Cmd) {
-	// Walidacja pól hasła
-	if err := v.validatePasswordFields(); err != nil {
-		v.errorMsg = err.Error()
-		return v, nil
-	}
-
-	// Utworzenie nowego hasła z szyfrowaniem
-	password, err := models.NewPassword(v.inputs[0].Value(), v.inputs[1].Value(), v.model.GetCipher())
-	if err != nil {
-		v.errorMsg = fmt.Sprintf("Failed to create password: %v", err)
-		return v, nil
-	}
-
-	// Aktualizacja lub dodanie hasła
-	var opErr interface{}
-	if v.currentPassword != nil {
-		opErr = v.model.UpdatePassword(v.currentPassword.Description, password)
-	} else {
-		opErr = v.model.AddPassword(password)
-	}
-
-	if opErr != nil {
-		v.errorMsg = fmt.Sprint(opErr)
-		return v, nil
-	}
-
-	// Zapis konfiguracji
-	if err := v.model.SaveConfig(); err != nil {
-		v.errorMsg = fmt.Sprintf("Failed to save configuration: %v", err)
-		return v, nil
-	}
-
-	// Aktualizacja stanu UI
-	v.model.UpdateLists()
-	v.model.SetStatus("Password saved successfully", false)
-	v.editing = false
-	v.resetState()
-
-	// Przekierowanie na widok główny
-	v.model.SetActiveView(ui.ViewMain)
-	return NewMainView(v.model), nil
 }
 
 func (v *editView) saveHostWithPassword() (tea.Model, tea.Cmd) {
@@ -831,4 +1008,102 @@ func (v *editView) validatePasswordFields() error {
 		return fmt.Errorf("password must be at least 6 characters long")
 	}
 	return nil
+}
+
+func (v *editView) initializeKeyInputs() {
+	// Reset all inputs first
+	for i := range v.inputs {
+		v.inputs[i].Reset()
+		v.inputs[i].Blur()
+	}
+
+	// Konfiguracja pól dla klucza SSH
+	v.inputs[0].Placeholder = "Key description"
+	v.inputs[0].CharLimit = 64
+	v.inputs[0].Focus()
+
+	v.inputs[1].Placeholder = "Key path (optional)"
+	v.inputs[1].CharLimit = 256
+
+	v.inputs[2].Placeholder = "Paste SSH key here (optional)"
+	v.inputs[2].CharLimit = 4096
+
+	// Jeśli edytujemy istniejący klucz
+	if v.currentKey != nil {
+		v.inputs[0].SetValue(v.currentKey.Description)
+		path, err := v.currentKey.GetKeyPath()
+		if err == nil {
+			v.inputs[1].SetValue(path)
+		}
+		// Celowo nie wczytujemy samego klucza ze względów bezpieczeństwa
+	}
+
+	// Ustaw fokus na pierwsze pole
+	v.activeField = 0
+	v.inputs[0].Focus()
+}
+
+func (v *editView) validateKeyFields() error {
+	description := v.inputs[0].Value()
+	path := v.inputs[1].Value()
+	keyData := v.inputs[2].Value()
+
+	if description == "" {
+		return fmt.Errorf("description is required")
+	}
+
+	if path != "" && keyData != "" {
+		return fmt.Errorf("cannot specify both path and key data")
+	}
+
+	if path == "" && keyData == "" {
+		return fmt.Errorf("either path or key data must be provided")
+	}
+
+	return nil
+}
+
+func (v *editView) renderKeyEdit(width int) string {
+	var content strings.Builder
+
+	// Tytuł
+	title := "Add New SSH Key"
+	if v.currentKey != nil {
+		title = "Edit SSH Key"
+	}
+	content.WriteString(ui.TitleStyle.Render(title) + "\n\n")
+
+	// Dopasowanie szerokości pól wejściowych
+	inputWidth := width - 8 // Marginesy i ramki
+
+	// Etykiety dla pól
+	labels := []string{
+		"Description:",
+		"Key Path (optional):",
+		"Key Data (optional):",
+	}
+
+	// Renderowanie pól wejściowych
+	for i, input := range v.inputs[:3] {
+		content.WriteString(ui.LabelStyle.Render(labels[i]) + "\n")
+
+		inputStyle := ui.InputStyle.Width(inputWidth)
+		if i == v.activeField {
+			inputStyle = ui.SelectedItemStyle.Width(inputWidth)
+		}
+		content.WriteString(inputStyle.Render(input.View()) + "\n\n")
+	}
+
+	// Dodanie informacji pomocniczej
+	content.WriteString(ui.DescriptionStyle.Render(
+		"Note: Provide either Key Path or Key Data, not both\n\n"))
+
+	// Dodanie kontroli na dole widoku
+	content.WriteString(v.renderControls(
+		Control{"ENTER", "Save"},
+		Control{"ESC", "Cancel"},
+		Control{"↑/↓", "Navigate"},
+	))
+
+	return content.String()
 }

@@ -142,7 +142,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.model.SetQuitting(true)
 			return v, tea.Quit
 
-		case "up", "k":
+		case "up", "w":
 			if len(v.hosts) > 0 && !v.connecting {
 				v.selectedIndex--
 				if v.selectedIndex < 0 {
@@ -151,7 +151,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.errMsg = ""
 			}
 
-		case "down", "j":
+		case "down", "s":
 			if len(v.hosts) > 0 && !v.connecting {
 				v.selectedIndex++
 				if v.selectedIndex >= len(v.hosts) {
@@ -164,7 +164,15 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 			return v.handleConnect()
-
+		case "k":
+			if !v.connecting {
+				editView := NewEditView(v.model)
+				editView.mode = modeKeyList // Zmieniamy na modeKeyList zamiast modeKeyEdit
+				editView.editing = true
+				editView.keys = v.model.GetKeys() // Pobieramy listę kluczy
+				editView.selectedItemIndex = 0    // Ustawiamy początkowy indeks zaznaczenia
+				return editView, nil
+			}
 		case "e", "f4":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil

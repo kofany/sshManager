@@ -156,47 +156,44 @@ var (
 
 	// Style dla różnych typów plików
 	DirectoryStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#1E90FF")). // DodgerBlue dla katalogów
+			Foreground(lipgloss.Color("#1E90FF")).
 			Bold(true)
 
 	ExecutableStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#32CD32")) // LimeGreen dla plików wykonywalnych
+			Foreground(lipgloss.Color("#32CD32"))
 
 	ArchiveStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#BA55D3")) // MediumOrchid dla archiwów
+			Foreground(lipgloss.Color("#BA55D3"))
 
 	ImageStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF8C00")) // DarkOrange dla obrazów
+			Foreground(lipgloss.Color("#FF8C00"))
 
 	DocumentStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFD700")) // Gold dla dokumentów
+			Foreground(lipgloss.Color("#FFD700"))
 
 	CodeCStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00CED1")) // DarkTurquoise dla plików .c
+			Foreground(lipgloss.Color("#00CED1"))
 
 	CodeHStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4682B4")) // SteelBlue dla plików .h
+			Foreground(lipgloss.Color("#4682B4"))
 
 	CodeGoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#2E8B57")) // SeaGreen dla plików .go
+			Foreground(lipgloss.Color("#2E8B57"))
 
 	CodePyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6A5ACD")) // SlateBlue dla plików .py
+			Foreground(lipgloss.Color("#6A5ACD"))
 
 	CodeJsStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#DAA520")) // Goldenrod dla plików .js
-
+			Foreground(lipgloss.Color("#DAA520"))
 	CodeJsonStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7FFF00")) // Chartreuse dla plików .json
-
+			Foreground(lipgloss.Color("#7FFF00"))
 	CodeDefaultStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#708090")) // SlateGray dla pozostałych plików kodu
+				Foreground(lipgloss.Color("#708090"))
 
 	DefaultFileStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#A9A9A9")) // DarkGray dla pozostałych plików
-
+				Foreground(lipgloss.Color("#A9A9A9"))
 	SelectedFileStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FF00BD")) // DarkGray dla pozostałych plików
+				Foreground(lipgloss.Color("#FF1493"))
 )
 
 // GetMaxWidth zwraca maksymalną szerokość tekstu w slice'u
