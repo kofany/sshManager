@@ -12,6 +12,7 @@ import (
 
 	"sshManager/internal/ssh"
 	"sshManager/internal/ui"
+	"sshManager/internal/ui/components"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -76,34 +77,16 @@ type transferView struct {
 	showHelp      bool
 	input         textinput.Model
 	mutex         sync.Mutex
-	width         int         // Dodane
-	height        int         // Dodane
-	escPressed    bool        // flaga wskazująca czy ESC został wciśnięty
-	escTimeout    *time.Timer // timer do resetowania stanu ESC
-	popup         *popup      // nowe pole
+	width         int               // Dodane
+	height        int               // Dodane
+	escPressed    bool              // flaga wskazująca czy ESC został wciśnięty
+	escTimeout    *time.Timer       // timer do resetowania stanu ESC
+	popup         *components.Popup // Zmieniamy typ na nowy komponent
 
 }
 type connectionStatusMsg struct {
 	connected bool
 	err       error
-}
-
-type promptType int
-
-const (
-	promptNone promptType = iota
-	promptRename
-	promptMkdir
-	promptDelete
-)
-
-type popup struct {
-	promptType promptType
-	title      string
-	message    string
-	input      textinput.Model
-	width      int
-	height     int
 }
 
 func NewTransferView(model *ui.Model) *transferView {
@@ -467,13 +450,14 @@ func (v *transferView) View() string {
 	finalContent := ui.WindowStyle.Render(content.String())
 
 	// Jeśli jest aktywny popup, renderuj go na wierzchu
+	// Jeśli jest aktywny popup, renderuj go na wierzchu
 	if v.popup != nil {
 		return lipgloss.Place(
 			v.width,
 			v.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			finalContent+"\n"+v.renderPopup(),
+			finalContent+"\n"+v.popup.Render(), // używamy popup.Render() zamiast renderPopup()
 			lipgloss.WithWhitespaceChars(""),
 			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 		)
@@ -985,6 +969,8 @@ func (v *transferView) handleError(err error) {
 	}
 }
 
+// update
+
 func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1005,9 +991,25 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mutex.Lock()
 		v.transferring = false
 		if msg.err != nil {
-			v.errorMessage = fmt.Sprintf("Transfer error: %v", msg.err)
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Transfer Error",
+				fmt.Sprintf("Transfer error: %v", msg.err),
+				50,
+				7,
+				v.width,
+				v.height,
+			)
 		} else {
-			v.statusMessage = "Transfer completed successfully"
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Success",
+				"Transfer completed successfully",
+				50,
+				7,
+				v.width,
+				v.height,
+			)
 			dstPanel := v.getInactivePanel()
 			if dstPanel == &v.localPanel {
 				v.updateLocalPanel()
@@ -1020,36 +1022,42 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case connectionStatusMsg:
 		v.mutex.Lock()
-		defer v.mutex.Unlock()
 		v.connecting = false
 		if msg.err != nil {
 			v.connected = false
-			v.errorMessage = fmt.Sprintf("Connection error: %v", msg.err)
-			v.statusMessage = ""
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Connection Error",
+				fmt.Sprintf("Connection error: %v", msg.err),
+				50,
+				7,
+				v.width,
+				v.height,
+			)
 		} else {
 			v.connected = msg.connected
-			v.statusMessage = "Connection established"
-			v.errorMessage = ""
 		}
+		v.mutex.Unlock()
 		return v, nil
 
 	case tea.KeyMsg:
-		// Najpierw obsłużmy popup jeśli jest aktywny
+		// Obsługa popupu
 		if v.popup != nil {
 			switch msg.String() {
 			case "esc":
 				v.popup = nil
 				return v, nil
 			case "enter":
-				if v.popup.promptType != promptDelete {
-					if err := v.handleCommand(v.input.Value()); err != nil {
+				if v.popup.Type != components.PopupDelete {
+					// Użyj v.popup.Input zamiast v.input
+					if err := v.handleCommand(v.popup.Input.Value()); err != nil {
 						v.handleError(err)
 					}
 					v.popup = nil
 					return v, nil
 				}
 			case "y":
-				if v.popup.promptType == promptDelete {
+				if v.popup.Type == components.PopupDelete {
 					if err := v.executeDelete(); err != nil {
 						v.handleError(err)
 					}
@@ -1057,19 +1065,21 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return v, nil
 				}
 			case "n":
-				if v.popup.promptType == promptDelete {
+				if v.popup.Type == components.PopupDelete {
 					v.popup = nil
 					return v, nil
 				}
 			default:
-				if v.popup.promptType != promptDelete {
+				if v.popup.Type != components.PopupDelete {
 					var cmd tea.Cmd
-					v.input, cmd = v.input.Update(msg)
+					// Aktualizuj v.popup.Input zamiast v.input
+					v.popup.Input, cmd = v.popup.Input.Update(msg)
 					return v, cmd
 				}
 			}
+			return v, nil
 		}
-		// Najpierw obsłużmy wyjście z pomocy jeśli jest aktywna
+		// Obsługa trybu pomocy
 		if v.showHelp {
 			switch msg.String() {
 			case "esc", "q", "f1":
@@ -1080,27 +1090,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Obsługa wejścia użytkownika, jeśli czekamy na input
-		if v.isWaitingForInput() {
-			switch msg.String() {
-			case "enter":
-				if err := v.handleCommand(v.input.Value()); err != nil {
-					v.handleError(err)
-				}
-				v.input.Reset()
-				return v, nil
-			case "esc": // Dodajemy obsługę ESC
-				// Czyścimy komunikat o oczekiwaniu na input
-				v.statusMessage = ""
-				// Resetujemy pole input
-				v.input.Reset()
-				return v, nil
-			default:
-				var cmd tea.Cmd
-				v.input, cmd = v.input.Update(msg)
-				return v, cmd
-			}
-		}
 		// Obsługa sekwencji ESC
 		if v.escPressed {
 			switch msg.String() {
@@ -1129,17 +1118,33 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "6":
 				if !v.transferring {
-					v.popup = createPopup(promptRename, "Rename", "Enter new name:")
-					v.input.SetValue("")
-					v.input.Focus()
+					v.popup = components.NewPopup(
+						components.PopupRename,
+						"Rename",
+						"Enter new name:",
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+					v.popup.Input.SetValue("")
+					v.popup.Input.Focus()
 				}
 				return v, nil
 
 			case "7":
 				if !v.transferring {
-					v.popup = createPopup(promptMkdir, "Create Directory", "Enter directory name:")
-					v.input.SetValue("")
-					v.input.Focus()
+					v.popup = components.NewPopup(
+						components.PopupMkdir,
+						"Create Directory",
+						"Enter directory name:",
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+					v.popup.Input.SetValue("")
+					v.popup.Input.Focus()
 				}
 				return v, nil
 
@@ -1158,9 +1163,8 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
-		// Standardowa obsługa klawiszy
-		switch msg.String() {
-		case "esc":
+		// Pojedyncze naciśnięcie ESC
+		if msg.String() == "esc" {
 			if v.popup != nil {
 				v.popup = nil
 				return v, nil
@@ -1175,18 +1179,12 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.escPressed = false
 			}()
 			return v, nil
+		}
 
-		case "q":
-			if v.transferring {
-				return v, nil
-			}
-			if v.connected {
-				transfer := v.model.GetTransfer()
-				if transfer != nil {
-					transfer.Disconnect()
-				}
-			}
-			v.model.SetActiveView(ui.ViewMain)
+		// Standardowe klawisze funkcyjne
+		switch msg.String() {
+		case "f1":
+			v.showHelp = !v.showHelp
 			return v, nil
 
 		case "f5", "c":
@@ -1196,20 +1194,35 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-			// W metodzie Update w sekcji obsługi klawiszy
 		case "f6", "r":
 			if !v.transferring {
-				v.popup = createPopup(promptRename, "Rename", "Enter new name:")
-				v.input.SetValue("")
-				v.input.Focus()
+				v.popup = components.NewPopup(
+					components.PopupRename,
+					"Rename",
+					"Enter new name:",
+					50,
+					7,
+					v.width,
+					v.height,
+				)
+				v.popup.Input.SetValue("")
+				v.popup.Input.Focus()
 			}
 			return v, nil
 
 		case "f7", "m":
 			if !v.transferring {
-				v.popup = createPopup(promptMkdir, "Create Directory", "Enter directory name:")
-				v.input.SetValue("")
-				v.input.Focus()
+				v.popup = components.NewPopup(
+					components.PopupMkdir,
+					"Create Directory",
+					"Enter directory name:",
+					50,
+					7,
+					v.width,
+					v.height,
+				)
+				v.popup.Input.SetValue("")
+				v.popup.Input.Focus()
 			}
 			return v, nil
 
@@ -1223,10 +1236,32 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if entry.name == ".." {
 					return v, nil
 				}
-				v.popup = createPopup(promptDelete, "Delete", fmt.Sprintf("Delete %s '%s'? (y/n)",
-					map[bool]string{true: "directory", false: "file"}[entry.isDir],
-					entry.name))
+				v.popup = components.NewPopup(
+					components.PopupDelete,
+					"Delete",
+					fmt.Sprintf("Delete %s '%s'? (y/n)",
+						map[bool]string{true: "directory", false: "file"}[entry.isDir],
+						entry.name),
+					50,
+					7,
+					v.width,
+					v.height,
+				)
 			}
+			return v, nil
+
+		// Standardowe klawisze nawigacji i kontroli
+		case "q":
+			if v.transferring {
+				return v, nil
+			}
+			if v.connected {
+				transfer := v.model.GetTransfer()
+				if transfer != nil {
+					transfer.Disconnect()
+				}
+			}
+			v.model.SetActiveView(ui.ViewMain)
 			return v, nil
 
 		case "tab":
@@ -1251,7 +1286,15 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			panel := v.getActivePanel()
 			if err := v.enterDirectory(panel); err != nil {
-				v.handleError(err)
+				v.popup = components.NewPopup(
+					components.PopupMessage,
+					"Error",
+					err.Error(),
+					50,
+					7,
+					v.width,
+					v.height,
+				)
 			}
 			return v, nil
 
@@ -1268,32 +1311,29 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		case "y":
-			if strings.HasPrefix(v.statusMessage, "Delete ") {
-				if err := v.executeDelete(); err != nil {
-					v.handleError(err)
-				}
-				v.statusMessage = ""
-			}
-			return v, nil
-
-		case "n":
-			if strings.HasPrefix(v.statusMessage, "Delete ") {
-				v.statusMessage = "Delete cancelled"
-			}
-			return v, nil
-
-		case "f1":
-			v.showHelp = !v.showHelp
-			return v, nil
-
 		case "ctrl+r":
 			if err := v.updateLocalPanel(); err != nil {
-				v.handleError(err)
+				v.popup = components.NewPopup(
+					components.PopupMessage,
+					"Error",
+					fmt.Sprintf("Failed to update local panel: %v", err),
+					50,
+					7,
+					v.width,
+					v.height,
+				)
 			}
 			if v.connected {
 				if err := v.updateRemotePanel(); err != nil {
-					v.handleError(err)
+					v.popup = components.NewPopup(
+						components.PopupMessage,
+						"Error",
+						fmt.Sprintf("Failed to update remote panel: %v", err),
+						50,
+						7,
+						v.width,
+						v.height,
+					)
 				}
 			}
 			return v, nil
@@ -1313,12 +1353,12 @@ func (v *transferView) handleCommand(cmd string) error {
 		return fmt.Errorf("no active popup")
 	}
 
-	switch v.popup.promptType {
-	case promptRename:
+	switch v.popup.Type { // użycie Type zamiast promptType
+	case components.PopupRename: // użycie components.PopupRename zamiast promptRename
 		err := v.renameFile(cmd)
 		v.popup = nil
 		return err
-	case promptMkdir:
+	case components.PopupMkdir: // użycie components.PopupMkdir zamiast promptMkdir
 		err := v.createDirectory(cmd)
 		v.popup = nil
 		return err
@@ -1718,69 +1758,4 @@ func (v *transferView) renderFooter() string {
 	}
 
 	return footerContent.String()
-}
-
-func createPopup(pType promptType, title string, message string) *popup {
-	input := textinput.New()
-	input.Placeholder = "Enter value..."
-	input.Focus()
-
-	width := 50 // szerokość popupu
-	height := 7 // wysokość popupu
-
-	return &popup{
-		promptType: pType,
-		title:      title,
-		message:    message,
-		input:      input,
-		width:      width,
-		height:     height,
-	}
-}
-
-func (v *transferView) renderPopup() string {
-	if v.popup == nil {
-		return ""
-	}
-
-	// Style dla popupu
-	popupStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.Border).
-		Padding(1, 2).
-		Width(v.popup.width).
-		Height(v.popup.height)
-
-	titleStyle := ui.TitleStyle.
-		Align(lipgloss.Center).
-		Width(v.popup.width - 4)
-
-	// Budowanie zawartości popupu
-	var content strings.Builder
-	content.WriteString(titleStyle.Render(v.popup.title) + "\n\n")
-	content.WriteString(v.popup.message + "\n")
-
-	// Dodaj pole input dla promptów wymagających wprowadzenia tekstu
-	if v.popup.promptType != promptDelete {
-		content.WriteString(v.input.View())
-	}
-
-	// Dodaj informację o klawiszach
-	var keys string
-	switch v.popup.promptType {
-	case promptDelete:
-		keys = "y - Confirm, n - Cancel, ESC - Cancel"
-	default:
-		keys = "Enter - Confirm, ESC - Cancel"
-	}
-	content.WriteString("\n" + ui.DescriptionStyle.Render(keys))
-
-	// Renderuj popup
-	return lipgloss.Place(
-		v.width,
-		v.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		popupStyle.Render(content.String()),
-	)
 }

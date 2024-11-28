@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sshManager/internal/models"
 )
 
@@ -24,21 +25,94 @@ func NewSSHClient(passwords []models.Password) *SSHClient {
 	}
 }
 
-func CreateSSHCommand(host *models.Host, password string) *exec.Cmd {
+func GetHostKeyFingerprint(host *models.Host) (string, error) {
+	checkCmd := fmt.Sprintf("ssh-keyscan -H -p %s %s 2>/dev/null | ssh-keygen -lf -",
+		host.Port, host.IP)
+
+	cmd := exec.Command("sh", "-c", checkCmd)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("nie można pobrać odcisku klucza: %v", err)
+	}
+	return string(output), nil
+}
+
+func CreateSSHCommand(host *models.Host, password string, acceptKey bool) (*exec.Cmd, error) {
+	knownHostsPath := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+	searchCmd := fmt.Sprintf("ssh-keygen -F '[%s]:%s' -f '%s'",
+		host.IP, host.Port, knownHostsPath)
+
+	cmd := exec.Command("sh", "-c", searchCmd)
+	_, err := cmd.Output()
+	isKnown := err == nil
+
+	if !isKnown && !acceptKey {
+		// Zwracamy specjalny błąd informujący o potrzebie weryfikacji
+		return nil, &HostKeyVerificationRequired{
+			IP:   host.IP,
+			Port: host.Port,
+		}
+	}
+
+	if !isKnown && acceptKey {
+		// Dodaj klucz do known_hosts
+		if err := addHostKey(host); err != nil {
+			return nil, fmt.Errorf("nie można dodać klucza hosta: %v", err)
+		}
+	}
+
 	sshCommand := fmt.Sprintf(
-		"clear; sshpass -p '%s' ssh -o StrictHostKeyChecking=no %s@%s -p %s; clear",
+		"clear; sshpass -p '%s' ssh %s@%s -p %s; clear",
 		password, host.Login, host.IP, host.Port,
 	)
-	cmd := exec.Command("sh", "-c", sshCommand)
+
+	cmd = exec.Command("sh", "-c", sshCommand)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd
+
+	return cmd, nil
+}
+
+// Nowy typ błędu
+type HostKeyVerificationRequired struct {
+	IP   string
+	Port string
+}
+
+func (e *HostKeyVerificationRequired) Error() string {
+	return "wymagana weryfikacja klucza hosta"
 }
 
 func (s *SSHClient) Connect(host *models.Host, password string) error {
-	fmt.Printf("\nConnecting to %s@%s...\n", host.Login, host.IP)
-	cmd := CreateSSHCommand(host, password)
+	cmd, err := CreateSSHCommand(host, password, false)
+	if err != nil {
+		if _, ok := err.(*HostKeyVerificationRequired); ok {
+			// Przekazujemy ten błąd wyżej, aby UI mógł go obsłużyć
+			return err
+		}
+		return fmt.Errorf("błąd tworzenia komendy SSH: %v", err)
+	}
+
+	if cmd == nil {
+		return fmt.Errorf("nie utworzono komendy SSH")
+	}
+
+	s.currentHost = host
+	return cmd.Run()
+}
+
+// Dodajmy też pomocniczą metodę do ponowienia połączenia po zaakceptowaniu klucza
+func (s *SSHClient) ConnectWithAcceptedKey(host *models.Host, password string) error {
+	cmd, err := CreateSSHCommand(host, password, true)
+	if err != nil {
+		return fmt.Errorf("błąd tworzenia komendy SSH z zaakceptowanym kluczem: %v", err)
+	}
+
+	if cmd == nil {
+		return fmt.Errorf("nie utworzono komendy SSH")
+	}
+
 	s.currentHost = host
 	return cmd.Run()
 }
@@ -53,4 +127,34 @@ func (s *SSHClient) Disconnect() {
 
 func (s *SSHClient) GetCurrentHost() *models.Host {
 	return s.currentHost
+}
+
+func addHostKey(host *models.Host) error {
+	// Pobierz klucz hosta
+	scanCmd := fmt.Sprintf("ssh-keyscan -H -p %s %s 2>/dev/null", host.Port, host.IP)
+	cmd := exec.Command("sh", "-c", scanCmd)
+	hostKey, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("nie można pobrać klucza hosta: %v", err)
+	}
+
+	// Dodaj klucz do known_hosts
+	knownHostsPath := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+	err = os.MkdirAll(filepath.Dir(knownHostsPath), 0700)
+	if err != nil {
+		return fmt.Errorf("nie można utworzyć katalogu .ssh: %v", err)
+	}
+
+	f, err := os.OpenFile(knownHostsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("nie można otworzyć pliku known_hosts: %v", err)
+	}
+	defer f.Close()
+
+	_, err = f.Write(hostKey)
+	if err != nil {
+		return fmt.Errorf("nie można zapisać klucza hosta: %v", err)
+	}
+
+	return nil
 }

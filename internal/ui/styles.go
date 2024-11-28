@@ -10,7 +10,7 @@ var (
 	Highlight = lipgloss.Color("#7DC4E4") // Jasny niebieski dla tytułów i podświetleń
 	Special   = lipgloss.Color("#FF9E64") // Pomarańczowy dla przycisków i elementów specjalnych
 	Error     = lipgloss.Color("#F38BA8") // Jasny czerwony dla błędów
-	StatusBar = lipgloss.Color("#33B2FF") // Neonowy róż dla paska statusu
+	StatusBar = lipgloss.Color("#E7E7E7") // Neonowy róż dla paska statusu
 	Border    = lipgloss.Color("#33B2FF") // Kolor obramowań
 
 	// Style podstawowe

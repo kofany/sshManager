@@ -9,24 +9,34 @@ import (
 
 	"sshManager/internal/ssh"
 
+	"sshManager/internal/ui/components"
+
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 type mainView struct {
-	model         *ui.Model
-	hosts         []models.Host
-	selectedIndex int
-	currentDir    string
-	showHostList  bool
-	errMsg        string
-	status        string
-	connecting    bool
-	width         int
-	height        int
-	escPressed    bool
-	escTimeout    *time.Timer
+	model                     *ui.Model
+	hosts                     []models.Host
+	selectedIndex             int
+	currentDir                string
+	showHostList              bool
+	errMsg                    string
+	status                    string
+	connecting                bool
+	width                     int
+	height                    int
+	escPressed                bool
+	escTimeout                *time.Timer
+	waitingForKeyConfirmation bool
+	hostKeyFingerprint        string
+	pendingConnection         struct {
+		host     *models.Host
+		password string
+	}
+	popup *components.Popup // Dodane nowe pole
+
 }
 
 type connectError string
@@ -67,7 +77,66 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case tea.KeyMsg:
-		// Najpierw obsłużmy standardowe klawisze nawigacji
+		// Obsługa klawiszy dla popupu
+		if v.popup != nil {
+			switch msg.String() {
+			case "esc", "enter":
+				if v.popup.Type == components.PopupMessage {
+					v.popup = nil
+					return v, nil
+				}
+			case "y", "Y":
+				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
+					v.waitingForKeyConfirmation = false
+					cmd, err := ssh.CreateSSHCommand(v.pendingConnection.host, v.pendingConnection.password, true)
+					if err != nil {
+						v.popup = components.NewPopup(
+							components.PopupMessage,
+							"Błąd połączenia",
+							fmt.Sprintf("Failed to create SSH command: %v", err),
+							50,
+							7,
+							v.width,
+							v.height,
+						)
+						return v, nil
+					}
+					v.connecting = true
+					v.popup = components.NewPopup(
+						components.PopupMessage,
+						"SSH",
+						"Connecting...",
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+					return v, tea.ExecProcess(
+						cmd,
+						func(err error) tea.Msg {
+							return connectFinishedMsg{err: err}
+						},
+					)
+				}
+			case "n", "N":
+				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
+					v.waitingForKeyConfirmation = false
+					v.popup = components.NewPopup(
+						components.PopupMessage,
+						"SSH",
+						"Connection cancelled",
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+					return v, nil
+				}
+			}
+			return v, nil
+		}
+
+		// Standardowa obsługa klawiszy nawigacji
 		switch msg.String() {
 		case "q", "ctrl+c":
 			v.model.SetQuitting(true)
@@ -90,14 +159,12 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				v.errMsg = ""
 			}
-
 		case "enter", "c":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
 			}
 			return v.handleConnect()
 
-		// Obsługa edycji hosta (e, f4, ESC+4)
 		case "e", "f4":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
@@ -110,7 +177,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			editView.initializeHostInputs()
 			return editView, nil
 
-		// Obsługa dodawania nowego hosta (h)
 		case "h":
 			if !v.connecting {
 				editView := NewEditView(v.model)
@@ -121,7 +187,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return editView, nil
 			}
 
-		// Obsługa zarządzania hasłami (p)
 		case "p":
 			if !v.connecting {
 				editView := NewEditView(v.model)
@@ -131,6 +196,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				editView.selectedItemIndex = 0
 				return editView, nil
 			}
+
 		case "t":
 			if v.connecting || len(v.hosts) == 0 {
 				return v, nil
@@ -187,18 +253,32 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case connectFinishedMsg:
 		v.connecting = false
-		v.status = ""
 		if msg.err != nil {
-			v.errMsg = fmt.Sprintf("SSH connection failed: %v", msg.err)
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Błąd połączenia",
+				fmt.Sprintf("SSH connection failed: %v", msg.err),
+				50,
+				7,
+				v.width,
+				v.height,
+			)
 		} else {
-			v.errMsg = ""
+			v.popup = nil
 		}
 		return v, nil
 
 	case connectError:
-		v.errMsg = msg.Error()
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Błąd połączenia",
+			msg.Error(),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
 		v.connecting = false
-		v.status = ""
 		return v, nil
 	}
 
@@ -211,21 +291,90 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 
 	passwords := v.model.GetPasswords()
 	if host.PasswordID >= len(passwords) {
-		v.errMsg = "Invalid password ID"
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Connection Error",
+			"Invalid password ID",
+			50,
+			7,
+			v.width,
+			v.height,
+		)
 		return v, nil
 	}
 
 	password := passwords[host.PasswordID]
 	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
 	if err != nil {
-		v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Connection Error",
+			fmt.Sprintf("Failed to decrypt password: %v", err),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
+		return v, nil
+	}
+
+	cmd, err := ssh.CreateSSHCommand(&host, decryptedPass, false)
+	if err != nil {
+		if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
+			fingerprint, err := ssh.GetHostKeyFingerprint(&host)
+			if err != nil {
+				v.popup = components.NewPopup(
+					components.PopupMessage,
+					"Key Verification Error",
+					fmt.Sprintf("Cannot retrieve key fingerprint: %v", err),
+					50,
+					7,
+					v.width,
+					v.height,
+				)
+				return v, nil
+			}
+
+			v.waitingForKeyConfirmation = true
+			v.hostKeyFingerprint = fingerprint
+			v.pendingConnection.host = &host
+			v.pendingConnection.password = decryptedPass
+
+			v.popup = components.NewPopup(
+				components.PopupHostKey,
+				"Host Key Verification",
+				fmt.Sprintf("New host key for %s:%s\n\nKey fingerprint:\n%s\n",
+					verificationRequired.IP, verificationRequired.Port, fingerprint),
+				70,
+				12,
+				v.width,
+				v.height,
+			)
+			return v, nil
+		}
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Connection Error",
+			fmt.Sprintf("Failed to create SSH command: %v", err),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
 		return v, nil
 	}
 
 	v.connecting = true
-	v.status = "Connecting..."
+	v.popup = components.NewPopup(
+		components.PopupMessage,
+		"SSH",
+		"Connecting...",
+		50,
+		7,
+		v.width,
+		v.height,
+	)
 
-	cmd := ssh.CreateSSHCommand(&host, decryptedPass) // Używamy funkcji z pakietu ssh
 	return v, tea.ExecProcess(
 		cmd,
 		func(err error) tea.Msg {
@@ -331,9 +480,21 @@ func (v *mainView) View() string {
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
 
+	// Jeśli jest aktywny popup, renderuj go na wierzchu
+	if v.popup != nil {
+		return lipgloss.Place(
+			v.width,
+			v.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			baseView+"\n"+v.popup.Render(),
+			lipgloss.WithWhitespaceChars(""),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		)
+	}
+
 	return baseView
 }
-
 func (v *mainView) renderHostPanel() string {
 	style := ui.PanelStyle.Width(45)
 	title := "Available Hosts"
