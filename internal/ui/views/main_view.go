@@ -11,9 +11,9 @@ import (
 
 	"sshManager/internal/ui/components"
 
-	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 )
 
 type mainView struct {
@@ -216,6 +216,11 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 			return v.handleDelete()
+		case " ": // spacja
+			if !v.connecting && len(v.hosts) > 0 {
+				ui.SwitchTheme()
+				return v, nil
+			}
 
 		case "esc":
 			v.escPressed = true
@@ -466,13 +471,9 @@ func (v *mainView) View() string {
 
 	content.WriteString(mainContent + "\n\n")
 
-	// Status bar
-	statusBar := v.renderStatusBar()
-	content.WriteString(statusBar + "\n")
-
-	// Command bar
-	cmdBar := v.renderCommandBar()
-	content.WriteString(cmdBar)
+	// Status bar i Command bar
+	statusAndCmdBar := v.renderStatusBar()
+	content.WriteString(statusAndCmdBar + "\n")
 
 	// Zastosuj styl ramki do całej zawartości
 	framedContent := ui.WindowStyle.Render(content.String())
@@ -555,6 +556,7 @@ func (v *mainView) renderDetailsPanel() string {
 }
 
 func (v *mainView) renderStatusBar() string {
+	// Renderowanie paska statusu
 	var status string
 	if v.errMsg != "" {
 		status = ui.ErrorStyle.Render(v.errMsg)
@@ -568,51 +570,50 @@ func (v *mainView) renderStatusBar() string {
 		status = ui.DescriptionStyle.Render("No active connection, Press:")
 	}
 
-	return ui.StatusBarStyle.Render(status)
-}
-
-func (v *mainView) renderCommandBar() string {
-	t := table.New(
-		table.WithColumns([]table.Column{
-			{Title: "Connect", Width: 11},
-			{Title: "Navigate", Width: 12},
-			{Title: "Edit Host", Width: 14},
-			{Title: "Add Host", Width: 10},
-			{Title: "Pass", Width: 8},
-			{Title: "Transfer", Width: 11},
-			{Title: "Delete Host", Width: 14},
-			{Title: "Quit", Width: 5},
-		}),
-	)
-
-	rows := []table.Row{
-		{
-			"enter/c",    // Connect
-			"↑↓/k j",     // Navigate
-			"e/f4/ESC+4", // Edit
-			"h",          // Add
-			"p",          // Pass
-			"t",          // Transfer
-			"d/f8/ESC+8", // Delete
-			"q/^c",       // Quit
-		},
+	// Renderowanie tabeli poleceń
+	headers := []string{
+		"Connect", "Navigate", "Edit Host", "Add Host", "Pass",
+		"Transfer", "Delete Host", "List Keys", "Theme", "Quit",
+	}
+	shortcuts := []string{
+		"enter/c", "↑↓/w/s", "e/f4/ESC+4", "h", "p",
+		"t", "d/f8/ESC+8", "k", "space", "q/^c",
 	}
 
-	t.SetRows(rows)
+	// Renderowanie wierszy tabeli
+	var TableStyle = func(row, col int) lipgloss.Style {
+		switch {
+		case row == -1: // Nagłówki
+			return lipgloss.NewStyle().
+				Padding(0, 1).
+				Foreground(ui.Subtle).
+				Align(lipgloss.Center)
+		default: // Skróty
+			return lipgloss.NewStyle().
+				Padding(0, 1).
+				Foreground(ui.Special)
+		}
+	}
 
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		Foreground(ui.Subtle).
-		Bold(true).
-		Padding(0, 0)
+	cmdTable := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(ui.StatusBar)).
+		StyleFunc(TableStyle).
+		Headers(headers...).
+		Row(shortcuts...)
 
-	s.Cell = s.Cell.
-		Foreground(ui.Special).
-		Bold(true).
-		Padding(0, 0)
+	// Połączenie statusu i tabeli w jedną ramkę
+	fullContent := lipgloss.JoinVertical(
+		lipgloss.Left,
+		status,            // Pasek statusu
+		cmdTable.Render(), // Tabela poleceń
+	)
 
-	t.SetStyles(s)
-	t.SetHeight(2)
+	// Dodanie ramki wokół wszystkiego
+	framed := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Render(fullContent)
 
-	return t.View()
+	return framed
 }

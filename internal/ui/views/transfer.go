@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	ltable "github.com/charmbracelet/lipgloss/table"
 )
 
 // Dodaj na początku pliku po importach
@@ -1183,6 +1184,11 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Standardowe klawisze funkcyjne
 		switch msg.String() {
+		case " ": // dodajemy jako pierwszy case
+			if !v.transferring {
+				ui.SwitchTheme()
+				return v, nil
+			}
 		case "f1":
 			v.showHelp = !v.showHelp
 			return v, nil
@@ -1427,51 +1433,39 @@ var helpText = `
 `
 
 func (v *transferView) renderShortcuts() string {
-	t := table.New()
+	// Nagłówki tabeli i skróty
+	headers := []string{"Switch Panel", "Select", "Copy", "Rename", "MkDir", "Delete", "Help", "Exit"}
+	shortcuts := []string{"[Tab]", "[s]", "[F5|ESC+5|c]", "[F6|ESC+6|r]", "[F7|ESC+7|m]", "[F8|ESC+8|d]", "[F1]", "[q|ESC+0]"}
 
-	columns := []table.Column{
-		{Title: "Switch Panel", Width: 12},
-		{Title: "Select", Width: 8},
-		{Title: "Copy", Width: 14},
-		{Title: "Rename", Width: 14},
-		{Title: "MkDir", Width: 14},
-		{Title: "Delete", Width: 14},
-		{Title: "Help", Width: 6},
-		{Title: "Exit", Width: 10},
+	// Funkcja stylizująca kolumny
+	var TableStyle = func(row, col int) lipgloss.Style {
+		switch {
+		case row == 0: // Nagłówki
+			return lipgloss.NewStyle().
+				Padding(0, 1).
+				Foreground(ui.Subtle).
+				Align(lipgloss.Center)
+		default: // Skróty
+			return lipgloss.NewStyle().
+				Padding(0, 1).
+				Foreground(ui.Special).
+				Align(lipgloss.Center)
+		}
 	}
-	t.SetColumns(columns)
 
-	rows := []table.Row{
-		{
-			"[Tab]",
-			"[s]",
-			"[F5|ESC+5|c]",
-			"[F6|ESC+6|r]",
-			"[F7|ESC+7|m]",
-			"[F8|ESC+8|d]",
-			"[F1]",
-			"[q|ESC+0]",
-		},
-	}
-	t.SetRows(rows)
+	// Tworzenie tabeli
+	cmdTable := ltable.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(ui.StatusBar)).
+		StyleFunc(TableStyle).
+		Headers(headers...).
+		Row(shortcuts...)
 
-	// Set styles similar to renderCommandBar
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		Foreground(ui.Subtle).
-		Bold(true).
-		Padding(0, 0)
-
-	s.Cell = s.Cell.
-		Foreground(ui.Special).
-		Bold(true).
-		Padding(0, 0)
-
-	t.SetStyles(s)
-	t.SetHeight(2)
-
-	return t.View()
+	// Renderowanie tabeli
+	return cmdTable.Render()
 }
+
+// Funkcja pomocnicza do budowania wierszy
 
 // Pomocnicze stałe dla kolorów i stylów
 var (

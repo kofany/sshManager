@@ -6,13 +6,12 @@ import (
 
 var (
 	// Kolory
-	Subtle    = lipgloss.Color("#6C7086") // Subtelny szary dla mniej istotnego tekstu
-	Highlight = lipgloss.Color("#7DC4E4") // Jasny niebieski dla tytułów i podświetleń
-	Special   = lipgloss.Color("#FF9E64") // Pomarańczowy dla przycisków i elementów specjalnych
-	Error     = lipgloss.Color("#F38BA8") // Jasny czerwony dla błędów
-	StatusBar = lipgloss.Color("#E7E7E7") // Neonowy róż dla paska statusu
-	Border    = lipgloss.Color("#33B2FF") // Kolor obramowań
-
+	Subtle    = lipgloss.Color("#6C7086")
+	Highlight = lipgloss.Color("#7DC4E4")
+	Special   = lipgloss.Color("#FF9E64")
+	Error     = lipgloss.Color("#F38BA8")
+	StatusBar = lipgloss.Color("#E7E7E7")
+	Border    = lipgloss.Color("#33B2FF")
 	// Style podstawowe
 	BaseStyle = lipgloss.NewStyle().
 			Foreground(Subtle).
@@ -45,20 +44,20 @@ var (
 			Foreground(lipgloss.Color("#2DAFFF"))
 
 	LabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A6ADC8")) // Subtelny szary dla etykiet
-	// Pola wejściowe
+			Foreground(lipgloss.Color("#A6ADC8"))
+
 	InputStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(Highlight).
 			Padding(0, 1)
-	// Dodatkowe style dla statusów
+
 	StatusConnectingStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#7DC4E4")). // Jasny niebieski jak Highlight
+				Foreground(lipgloss.Color("#7DC4E4")).
 				Bold(true)
 
 	StatusConnectedStyle = lipgloss.NewStyle().
-				Foreground(Special). // Pomarańczowy jak dla przycisków
+				Foreground(Special).
 				Bold(true)
 
 	StatusDefaultStyle = lipgloss.NewStyle().
