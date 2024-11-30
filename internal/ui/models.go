@@ -418,8 +418,6 @@ func (m *Model) UpdateHost(oldName string, host *models.Host) interface{} {
 }
 
 // AddPassword dodaje nowe hasło
-
-// AddPassword dodaje nowe hasło
 func (m *Model) AddPassword(password *models.Password) error {
 	// Sprawdzenie czy hasło o takim opisie już istnieje
 	for _, p := range m.config.GetPasswords() {

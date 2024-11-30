@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sshManager/internal/models"
-	"strings"
 )
 
 type SSHClient struct {
@@ -61,17 +60,15 @@ func CreateSSHCommand(host *models.Host, authData string, acceptKey bool) (*exec
 	}
 
 	// Sprawdzamy czy używamy klucza czy hasła na podstawie prefiksu ID
-	isKey := strings.HasPrefix(fmt.Sprintf("%d", host.PasswordID), models.KeyPrefix)
+	isKey := host.PasswordID < 0
 
 	var sshCommand string
 	if isKey {
-		// Komenda dla autoryzacji kluczem
 		sshCommand = fmt.Sprintf(
 			"clear; ssh -i '%s' %s@%s -p %s; clear",
 			authData, host.Login, host.IP, host.Port,
 		)
 	} else {
-		// Komenda dla autoryzacji hasłem
 		sshCommand = fmt.Sprintf(
 			"clear; sshpass -p '%s' ssh %s@%s -p %s; clear",
 			authData, host.Login, host.IP, host.Port,

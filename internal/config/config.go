@@ -235,7 +235,8 @@ func (m *Manager) AddKey(key models.Key) error {
 		}
 
 		// Zapisz niezaszyfrowany klucz do pliku
-		if err := os.WriteFile(keyPath, []byte(key.RawKeyData), 0600); err != nil {
+		keyContent := strings.TrimSpace(key.RawKeyData) // usuwamy białe znaki z końca
+		if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
 			return fmt.Errorf("failed to write key file: %v", err)
 		}
 	}
@@ -271,8 +272,8 @@ func (m *Manager) UpdateKey(index int, key models.Key) error {
 			return fmt.Errorf("failed to create key directory: %v", err)
 		}
 
-		// Zapisz niezaszyfrowany klucz do pliku
-		if err := os.WriteFile(keyPath, []byte(key.RawKeyData), 0600); err != nil {
+		keyContent := strings.TrimSpace(key.RawKeyData) // usuwamy białe znaki z końca
+		if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
 			return fmt.Errorf("failed to write key file: %v", err)
 		}
 	}
@@ -288,17 +289,12 @@ func (m *Manager) DeleteKey(index int) error {
 	}
 
 	key := m.config.Keys[index]
-	keyID := fmt.Sprintf("%s%d", models.KeyPrefix, index)
+	actualIndex := -(index + 1) // Konwertujemy na ujemny indeks używany w PasswordID
 
 	// Sprawdź czy klucz nie jest używany przez żadnego hosta
 	for _, host := range m.config.Hosts {
-		// Najpierw sprawdź czy host używa klucza (zaczyna się od prefiksu "K")
-		hostAuthID := fmt.Sprintf("%d", host.PasswordID)
-		if strings.HasPrefix(hostAuthID, models.KeyPrefix) {
-			// Tylko wtedy porównuj pełne ID
-			if fmt.Sprintf("%s%d", models.KeyPrefix, host.PasswordID) == keyID {
-				return fmt.Errorf("key '%s' is in use by host '%s'", key.Description, host.Name)
-			}
+		if host.PasswordID == actualIndex {
+			return fmt.Errorf("key '%s' is in use by host '%s'", key.Description, host.Name)
 		}
 	}
 

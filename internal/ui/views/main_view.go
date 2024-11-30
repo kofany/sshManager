@@ -2,7 +2,6 @@ package views
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sshManager/internal/config"
 	"sshManager/internal/models"
@@ -14,6 +13,7 @@ import (
 	"sshManager/internal/ssh"
 
 	"sshManager/internal/ui/components"
+	"sshManager/internal/ui/messages"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -44,6 +44,7 @@ type mainView struct {
 }
 
 type connectError string
+type errMsg string
 
 type connectFinishedMsg struct {
 	err error
@@ -79,6 +80,23 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.height = msg.Height
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
+
+	case errMsg:
+		v.errMsg = string(msg)
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Error",
+			string(msg),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
+		return v, nil
+
+	case messages.ReloadAppMsg:
+		v.model.SetQuitting(true)
+		return v, tea.Quit
 
 	case tea.KeyMsg:
 		// Obsługa klawiszy dla popupu
@@ -171,10 +189,10 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "k":
 			if !v.connecting {
 				editView := NewEditView(v.model)
-				editView.mode = modeKeyList // Zmieniamy na modeKeyList zamiast modeKeyEdit
+				editView.mode = modeKeyList
 				editView.editing = true
-				editView.keys = v.model.GetKeys() // Pobieramy listę kluczy
-				editView.selectedItemIndex = 0    // Ustawiamy początkowy indeks zaznaczenia
+				editView.keys = v.model.GetKeys()
+				editView.selectedItemIndex = 0
 				return editView, nil
 			}
 		case "e", "f4":
@@ -220,12 +238,12 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 			return v.handleDelete()
-		case " ": // spacja
+		case " ":
 			if !v.connecting && len(v.hosts) > 0 {
 				ui.SwitchTheme()
 				return v, nil
 			}
-		case "ctrl+r": // lub inny wybrany skrót
+		case "ctrl+r":
 			return v.handleRestoreBackup()
 		case "esc":
 			v.escPressed = true
@@ -307,36 +325,75 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 	host := v.hosts[v.selectedIndex]
 	v.model.SetSelectedHost(&host)
 
-	passwords := v.model.GetPasswords()
-	if host.PasswordID >= len(passwords) {
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Connection Error",
-			"Invalid password ID",
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
+	var authData string
+	var err error
+
+	if host.PasswordID < 0 {
+		// Obsługa klucza SSH
+		keyIndex := -(host.PasswordID + 1) // Konwertujemy ujemny indeks na właściwy indeks klucza
+		keys := v.model.GetKeys()
+		if keyIndex >= len(keys) {
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Connection Error",
+				"Invalid key ID",
+				50,
+				7,
+				v.width,
+				v.height,
+			)
+			return v, nil
+		}
+
+		key := keys[keyIndex]
+		keyPath, err := key.GetKeyPath()
+		if err != nil {
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Connection Error",
+				fmt.Sprintf("Failed to get key path: %v", err),
+				50,
+				7,
+				v.width,
+				v.height,
+			)
+			return v, nil
+		}
+		authData = keyPath
+	} else {
+		// Obsługa hasła
+		passwords := v.model.GetPasswords()
+		if host.PasswordID >= len(passwords) {
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Connection Error",
+				"Invalid password ID",
+				50,
+				7,
+				v.width,
+				v.height,
+			)
+			return v, nil
+		}
+
+		password := passwords[host.PasswordID]
+		decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+		if err != nil {
+			v.popup = components.NewPopup(
+				components.PopupMessage,
+				"Connection Error",
+				fmt.Sprintf("Failed to decrypt password: %v", err),
+				50,
+				7,
+				v.width,
+				v.height,
+			)
+			return v, nil
+		}
+		authData = decryptedPass
 	}
 
-	password := passwords[host.PasswordID]
-	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-	if err != nil {
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Connection Error",
-			fmt.Sprintf("Failed to decrypt password: %v", err),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
-	}
-
-	cmd, err := ssh.CreateSSHCommand(&host, decryptedPass, false)
+	cmd, err := ssh.CreateSSHCommand(&host, authData, false)
 	if err != nil {
 		if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
 			fingerprint, err := ssh.GetHostKeyFingerprint(&host)
@@ -356,8 +413,7 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 			v.waitingForKeyConfirmation = true
 			v.hostKeyFingerprint = fingerprint
 			v.pendingConnection.host = &host
-			v.pendingConnection.password = decryptedPass
-
+			v.pendingConnection.password = authData
 			v.popup = components.NewPopup(
 				components.PopupHostKey,
 				"Host Key Verification",
@@ -572,7 +628,7 @@ func (v *mainView) renderStatusBar() string {
 			status = ui.SuccessStyle.Render(fmt.Sprintf("Connected to: %s", host.Name))
 		}
 	} else {
-		status = ui.DescriptionStyle.Render("To restore data from local backup press: CTRL + r")
+		status = ui.DescriptionStyle.Render("To restore data from local backup press: ctrl + r")
 	}
 
 	// Renderowanie tabeli poleceń
@@ -626,19 +682,75 @@ func (v *mainView) renderStatusBar() string {
 func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
-		v.errMsg = fmt.Sprintf("Could not determine config path: %v", err)
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Error",
+			fmt.Sprintf("Could not determine config path: %v", err),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
 		return v, nil
 	}
 
 	keysDir := filepath.Join(filepath.Dir(configPath), config.DefaultKeysDir)
-
-	// Pobierz klucz API z konfiguracji lub zmiennej środowiskowej
-	apiKey := os.Getenv("SSHM_API_KEY") // Docelowo powinien być w konfiguracji
-
-	if err := sync.RestoreAndSync(configPath, keysDir, apiKey, v.model.Program); err != nil {
-		v.errMsg = fmt.Sprintf("Error restoring and syncing: %v", err)
+	apiKey, err := v.model.GetConfig().LoadApiKey(v.model.GetCipher())
+	if err != nil {
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Error",
+			fmt.Sprintf("Failed to load API key: %v", err),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
 		return v, nil
 	}
 
-	return v, nil
+	// Najpierw przywróć pliki z backupu
+	if err := sync.RestoreFromBackup(configPath, keysDir); err != nil {
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Error",
+			fmt.Sprintf("Failed to restore backup: %v", err),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
+		return v, nil
+	}
+
+	// Wypchnij przywrócone pliki do API (używając obecnego szyfru)
+	if err := sync.PushToAPI(apiKey, configPath, keysDir); err != nil {
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"Error",
+			fmt.Sprintf("Failed to push to API: %v", err),
+			50,
+			7,
+			v.width,
+			v.height,
+		)
+		return v, nil
+	}
+
+	// Informujemy o sukcesie i restartujemy
+	v.popup = components.NewPopup(
+		components.PopupMessage,
+		"Success",
+		"Backup restored and synced with API. Press Enter to restart.",
+		50,
+		7,
+		v.width,
+		v.height,
+	)
+
+	return v, tea.Sequence(
+		func() tea.Msg {
+			return messages.ReloadAppMsg{}
+		},
+	)
 }

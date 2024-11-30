@@ -20,6 +20,7 @@ type programModel struct {
 	uiModel     *ui.Model
 	currentView tea.Model
 	cipher      *crypto.Cipher
+	restarting  bool
 }
 
 func initialModel() *programModel {
@@ -44,6 +45,10 @@ func initialModel() *programModel {
 		uiModel:     uiModel,
 		currentView: initialPrompt,
 	}
+}
+
+func (m *programModel) IsRestarting() bool {
+	return m.restarting
 }
 
 func (m *programModel) Init() tea.Cmd {
@@ -117,9 +122,9 @@ func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleApiKeyAndSync(msg.Key, false)
 
 	case messages.ReloadAppMsg:
-		// Zresetuj model i załaduj dane od nowa
-		m.currentView = initialModel().currentView
-		return m, m.currentView.Init()
+		m.restarting = true
+		m.quitting = true
+		return m, tea.Quit
 
 	default:
 		// Zapisz aktualny widok
@@ -191,14 +196,19 @@ func (m *programModel) View() string {
 }
 
 func main() {
-	// Inicjalizacja modelu programu
-	m := initialModel()
+	for {
+		m := initialModel()
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		m.SetProgram(p)
 
-	// Uruchomienie programu
-	p := tea.NewProgram(m, tea.WithMouseCellMotion(), tea.WithAltScreen())
-	m.SetProgram(p)
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error running program: %v", err)
-		os.Exit(1)
+		if _, err := p.Run(); err != nil {
+			fmt.Printf("Error running program: %v", err)
+			os.Exit(1)
+		}
+
+		// Jeśli nie jest to restart, wyjdź z pętli
+		if !m.restarting {
+			break
+		}
 	}
 }

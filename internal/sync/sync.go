@@ -9,10 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sshManager/internal/crypto"
-	"sshManager/internal/ui/messages"
+	"sshManager/internal/models"
+	"strconv"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 const (
@@ -158,101 +157,151 @@ func SyncWithAPI(apiKey string) (*SyncResponse, error) {
 }
 
 func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Cipher) error {
-	// Przygotuj strukturę danych do zapisania
-	configData := struct {
-		Hosts     []interface{} `json:"hosts"`
-		Passwords []interface{} `json:"passwords"`
-		Keys      []interface{} `json:"keys"`
+	// Przygotuj strukturę danych do lokalnego zapisu
+	config := struct {
+		Hosts     []models.Host     `json:"hosts"`
+		Passwords []models.Password `json:"passwords"`
+		Keys      []models.Key      `json:"keys"`
 	}{
-		Hosts:     data.Hosts,
-		Passwords: data.Passwords,
-		Keys:      data.Keys,
+		Hosts:     make([]models.Host, 0),
+		Passwords: make([]models.Password, 0),
+		Keys:      make([]models.Key, 0),
 	}
 
-	// Konwertuj do JSON
-	jsonData, err := json.MarshalIndent(configData, "", "    ")
+	// Konwersja hostów z API do lokalnej struktury
+	for _, h := range data.Hosts {
+		if hostMap, ok := h.(map[string]interface{}); ok {
+			host := models.Host{
+				Name:        getStringValue(hostMap, "name"),
+				Description: getStringValue(hostMap, "description"),
+				Login:       getStringValue(hostMap, "login"),
+				IP:          getStringValue(hostMap, "ip"),
+				Port:        getStringValue(hostMap, "port"),
+				PasswordID:  getIntValue(hostMap, "password_id"),
+			}
+			config.Hosts = append(config.Hosts, host)
+		}
+	}
+
+	// Konwersja haseł z API do lokalnej struktury
+	for _, p := range data.Passwords {
+		if passMap, ok := p.(map[string]interface{}); ok {
+			pass := models.Password{
+				Description: getStringValue(passMap, "description"),
+				Password:    getStringValue(passMap, "password"),
+			}
+			config.Passwords = append(config.Passwords, pass)
+		}
+	}
+
+	// Konwersja kluczy z API do lokalnej struktury
+	for _, k := range data.Keys {
+		if keyMap, ok := k.(map[string]interface{}); ok {
+			key := models.Key{
+				Description: getStringValue(keyMap, "description"),
+				Path:        getStringValue(keyMap, "path"),
+				KeyData:     getStringValue(keyMap, "key_data"),
+			}
+			config.Keys = append(config.Keys, key)
+		}
+	}
+
+	// Zapisz skonwertowane dane do pliku konfiguracyjnego
+	jsonData, err := json.MarshalIndent(config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("error marshaling config data: %v", err)
 	}
 
-	// Zapisz plik konfiguracyjny
 	if err := os.WriteFile(configPath, jsonData, 0600); err != nil {
 		return fmt.Errorf("error saving config file: %v", err)
 	}
 
-	// Usuń tylko oryginalne pliki kluczy (bez .old)
+	// Usuń stare pliki kluczy, ale zachowaj backupy
 	entries, err := os.ReadDir(keysDir)
 	if err != nil {
 		return fmt.Errorf("error reading keys directory: %v", err)
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || filepath.Ext(entry.Name()) == ".old" {
 			continue
 		}
-		if filepath.Ext(entry.Name()) == ".old" {
-			continue // Nie usuwaj plików backupów
-		}
-		keyPath := filepath.Join(keysDir, entry.Name())
-		logDebug := func(message string) {
-			// Zakładam, że masz dostęp do funkcji logowania, podobnie jak w BackupKeys
-			logFile, err := os.OpenFile("backup_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Printf("Cannot open log file: %v\n", err)
-				return
-			}
-			defer logFile.Close()
-			timestamp := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Fprintf(logFile, "[%s] %s\n", timestamp, message)
-		}
 
-		logDebug(fmt.Sprintf("Removing key file: %s", keyPath))
+		keyPath := filepath.Join(keysDir, entry.Name())
 		if err := os.Remove(keyPath); err != nil {
-			logDebug(fmt.Sprintf("Error removing key file %s: %v", keyPath, err))
+			logToFile(fmt.Sprintf("Error removing key file %s: %v", keyPath, err))
 			return fmt.Errorf("error removing key file %s: %v", entry.Name(), err)
 		}
+		logToFile(fmt.Sprintf("Removed key file: %s", keyPath))
 	}
 
-	// Odtwórz katalog kluczy (nie usuwaj plików backupów)
-	// Upewnij się, że katalog istnieje
+	// Odtwórz katalog kluczy i zapisz nowe klucze
 	if err := os.MkdirAll(keysDir, 0700); err != nil {
 		return fmt.Errorf("error creating keys directory: %v", err)
 	}
 
 	// Zapisz nowe klucze
-	for _, key := range data.Keys {
-		keyData, ok := key.(map[string]interface{})
-		if !ok {
+	for _, key := range config.Keys {
+		if key.KeyData == "" || key.Description == "" {
 			continue
 		}
 
-		description, ok := keyData["description"].(string)
-		if !ok || description == "" {
-			continue
-		}
-
-		// Sprawdź czy klucz ma dane do zapisania
-		keyContent, exists := keyData["key_data"].(string)
-		if !exists || keyContent == "" {
-			continue
-		}
-
-		// Odszyfruj zawartość klucza przed zapisem do pliku
+		// Odszyfruj zawartość klucza przed zapisem
+		keyContent := key.KeyData
 		if cipher != nil {
-			decryptedContent, err := cipher.Decrypt(keyContent)
+			decrypted, err := cipher.Decrypt(keyContent)
 			if err != nil {
-				return fmt.Errorf("error decrypting key %s: %v", description, err)
+				return fmt.Errorf("error decrypting key %s: %v", key.Description, err)
 			}
-			keyContent = decryptedContent
+			keyContent = decrypted
 		}
 
-		keyPath := filepath.Join(keysDir, description+".key")
+		keyPath := filepath.Join(keysDir, key.Description+".key")
 		if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
 			return fmt.Errorf("error saving key file %s: %v", keyPath, err)
 		}
+		logToFile(fmt.Sprintf("Saved key file: %s", keyPath))
 	}
 
 	return nil
+}
+
+// Pomocnicze funkcje do konwersji danych
+func getStringValue(m map[string]interface{}, key string) string {
+	if val, ok := m[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+func getIntValue(m map[string]interface{}, key string) int {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		case string:
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+func logToFile(message string) {
+	logFile, err := os.OpenFile("backup_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Printf("Cannot open log file: %v\n", err)
+		return
+	}
+	defer logFile.Close()
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Fprintf(logFile, "[%s] %s\n", timestamp, message)
 }
 
 // RestoreFromBackup przywraca pliki z kopii zapasowych
@@ -339,24 +388,6 @@ func PushToAPI(apiKey string, configPath, keysDir string) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, body)
 	}
-
-	return nil
-}
-
-// RestoreAndSync przywraca dane z backupu i synchronizuje je z API
-func RestoreAndSync(configPath, keysDir string, apiKey string, program *tea.Program) error {
-	// Najpierw przywróć z backupu
-	if err := RestoreFromBackup(configPath, keysDir); err != nil {
-		return fmt.Errorf("error restoring from backup: %v", err)
-	}
-
-	// Wypchnij przywrócone dane do API
-	if err := PushToAPI(apiKey, configPath, keysDir); err != nil {
-		return fmt.Errorf("error pushing restored data to API: %v", err)
-	}
-
-	// Wyślij komendę do przeładowania aplikacji
-	program.Send(messages.ReloadAppMsg{})
 
 	return nil
 }

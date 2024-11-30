@@ -1692,17 +1692,38 @@ func (v *transferView) ensureConnected() error {
 		return fmt.Errorf("no host selected")
 	}
 
-	passwords := v.model.GetPasswords()
-	if host.PasswordID >= len(passwords) {
-		return fmt.Errorf("invalid password ID")
-	}
-	password := passwords[host.PasswordID]
-	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-	if err != nil {
-		return fmt.Errorf("failed to decrypt password: %v", err)
+	var authData string
+
+	if host.PasswordID < 0 {
+		// Obsługa klucza SSH
+		keyIndex := -(host.PasswordID + 1)
+		keys := v.model.GetKeys()
+		if keyIndex >= len(keys) {
+			return fmt.Errorf("invalid key ID")
+		}
+
+		key := keys[keyIndex]
+		keyPath, pathErr := key.GetKeyPath()
+		if pathErr != nil {
+			return fmt.Errorf("failed to get key path: %v", pathErr)
+		}
+		authData = keyPath
+	} else {
+		// Obsługa hasła
+		passwords := v.model.GetPasswords()
+		if host.PasswordID >= len(passwords) {
+			return fmt.Errorf("invalid password ID")
+		}
+
+		password := passwords[host.PasswordID]
+		decryptedPass, decErr := password.GetDecrypted(v.model.GetCipher())
+		if decErr != nil {
+			return fmt.Errorf("failed to decrypt password: %v", decErr)
+		}
+		authData = decryptedPass
 	}
 
-	if err := transfer.Connect(host, decryptedPass); err != nil {
+	if err := transfer.Connect(host, authData); err != nil {
 		return fmt.Errorf("failed to establish SFTP connection: %v", err)
 	}
 

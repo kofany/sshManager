@@ -48,6 +48,7 @@ type editView struct {
 	height                int
 	currentKey            *models.Key
 	keys                  []models.Key
+	authTypePasswords     bool // true jeśli aktywna jest lista haseł, false jeśli lista kluczy
 }
 
 func NewEditView(model *ui.Model) *editView {
@@ -68,6 +69,7 @@ func NewEditView(model *ui.Model) *editView {
 		passwords:             make([]models.Password, 0),
 		passwordList:          make([]models.Password, 0),
 		keys:                  make([]models.Key, 0),
+		authTypePasswords:     true,
 	}
 
 	// Initialize text inputs
@@ -191,10 +193,15 @@ func (v *editView) renderAuthSelection(width int) string {
 
 	// Najpierw wyświetlamy hasła
 	if len(v.passwordList) > 0 {
-		content.WriteString(ui.LabelStyle.Render("Passwords:") + "\n")
+		headerStyle := ui.LabelStyle
+		if v.authTypePasswords {
+			headerStyle = ui.SelectedItemStyle
+		}
+		content.WriteString(headerStyle.Render("Passwords:") + "\n")
+
 		for i, pwd := range v.passwordList {
 			prefix := "  "
-			if i == v.selectedPasswordIndex {
+			if v.authTypePasswords && i == v.selectedPasswordIndex {
 				prefix = "> "
 				line := fmt.Sprintf("%-*s", listWidth-1, prefix+pwd.Description)
 				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
@@ -208,13 +215,17 @@ func (v *editView) renderAuthSelection(width int) string {
 	// Następnie wyświetlamy klucze SSH
 	if len(v.keys) > 0 {
 		if len(v.passwordList) > 0 {
-			content.WriteString("\n") // Odstęp między sekcjami
+			content.WriteString("\n")
 		}
-		content.WriteString(ui.LabelStyle.Render("SSH Keys:") + "\n")
-		startIndex := len(v.passwordList)
+		headerStyle := ui.LabelStyle
+		if !v.authTypePasswords {
+			headerStyle = ui.SelectedItemStyle
+		}
+		content.WriteString(headerStyle.Render("SSH Keys:") + "\n")
+
 		for i, key := range v.keys {
 			prefix := "  "
-			if i+startIndex == v.selectedPasswordIndex {
+			if !v.authTypePasswords && i == v.selectedPasswordIndex {
 				prefix = "> "
 				line := fmt.Sprintf("%-*s", listWidth-1, prefix+key.Description)
 				content.WriteString(ui.SelectedItemStyle.Render(line) + "\n")
@@ -226,6 +237,8 @@ func (v *editView) renderAuthSelection(width int) string {
 	}
 
 	content.WriteString("\n" + v.renderControls(
+		Control{"↑↓", "Navigate"},
+		Control{"Tab", "Switch section"},
 		Control{"ENTER", "Select"},
 		Control{"ESC", "Cancel"},
 	))
@@ -619,15 +632,44 @@ func (v *editView) handleNavigationKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (v *editView) navigatePasswordSelection(key string) {
-	if key == "up" || key == "shift+tab" {
-		v.selectedPasswordIndex--
-		if v.selectedPasswordIndex < 0 {
-			v.selectedPasswordIndex = len(v.passwordList) - 1
+	switch key {
+	case "tab":
+		// Przełączanie między hasłami a kluczami
+		v.authTypePasswords = !v.authTypePasswords
+		v.selectedPasswordIndex = 0 // Reset indeksu przy przełączaniu
+
+	case "up", "shift+tab":
+		if v.authTypePasswords {
+			if len(v.passwordList) > 0 {
+				v.selectedPasswordIndex--
+				if v.selectedPasswordIndex < 0 {
+					v.selectedPasswordIndex = len(v.passwordList) - 1
+				}
+			}
+		} else {
+			if len(v.keys) > 0 {
+				v.selectedPasswordIndex--
+				if v.selectedPasswordIndex < 0 {
+					v.selectedPasswordIndex = len(v.keys) - 1
+				}
+			}
 		}
-	} else {
-		v.selectedPasswordIndex++
-		if v.selectedPasswordIndex >= len(v.passwordList) {
-			v.selectedPasswordIndex = 0
+
+	case "down":
+		if v.authTypePasswords {
+			if len(v.passwordList) > 0 {
+				v.selectedPasswordIndex++
+				if v.selectedPasswordIndex >= len(v.passwordList) {
+					v.selectedPasswordIndex = 0
+				}
+			}
+		} else {
+			if len(v.keys) > 0 {
+				v.selectedPasswordIndex++
+				if v.selectedPasswordIndex >= len(v.keys) {
+					v.selectedPasswordIndex = 0
+				}
+			}
 		}
 	}
 }
@@ -815,6 +857,16 @@ func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 				v.errorMsg = "invalid SSH key format"
 				return v, nil
 			}
+
+			// Preprocessing klucza SSH
+			keyData = strings.TrimSpace(keyData)
+			keyData = strings.ReplaceAll(keyData, "\r\n", "\n")
+			keyData = strings.ReplaceAll(keyData, "\r", "\n")
+
+			// Dodajemy pojedynczy znak nowej linii na końcu jeśli go nie ma
+			if !strings.HasSuffix(keyData, "\n") {
+				keyData += "\n"
+			}
 		}
 
 		// Create new key
@@ -913,7 +965,13 @@ func (v *editView) validateAndSaveHost() (tea.Model, tea.Cmd) {
 }
 
 func (v *editView) saveHostWithPassword() (tea.Model, tea.Cmd) {
-	v.tmpHost.PasswordID = v.selectedPasswordIndex
+	if v.authTypePasswords {
+		// Dla haseł używamy indeksu dodatniego
+		v.tmpHost.PasswordID = v.selectedPasswordIndex
+	} else {
+		// Dla kluczy używamy indeksu ujemnego
+		v.tmpHost.PasswordID = -(v.selectedPasswordIndex + 1) // +1 żeby uniknąć problemu z zerem
+	}
 
 	// Aktualizacja lub dodanie hosta
 	var err interface{}

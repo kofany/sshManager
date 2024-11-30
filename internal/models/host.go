@@ -8,7 +8,7 @@ type Host struct {
 	Login       string `json:"login"`
 	IP          string `json:"ip"`
 	Port        string `json:"port"`
-	PasswordID  int    `json:"password_id"`
+	PasswordID  int    `json:"password_id"` // Powrót do int
 }
 
 type Config struct {
