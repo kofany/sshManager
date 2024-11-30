@@ -113,6 +113,7 @@ type Model struct {
 	terminalWidth  int
 	terminalHeight int
 	selectedItems  map[string]bool // mapa przechowująca zaznaczone elementy (klucz: ścieżka pliku)
+	localMode      bool            // true jeśli pracujemy bez synchronizacji
 
 }
 
@@ -667,4 +668,15 @@ func (m *Model) DeleteKey(description string) error {
 	}
 
 	return nil
+}
+func (m *Model) SetLocalMode(local bool) {
+	m.localMode = local
+}
+
+func (m *Model) IsLocalMode() bool {
+	return m.localMode
+}
+
+func (m *Model) GetConfig() *config.Manager {
+	return m.config
 }

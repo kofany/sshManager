@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -31,6 +32,7 @@ type editView struct {
 	editing               bool
 	editingHost           bool
 	inputs                []textinput.Model
+	keyTextarea           textarea.Model // Dodajemy pole na textarea
 	currentHost           *models.Host
 	currentPassword       *models.Password
 	errorMsg              string
@@ -42,10 +44,10 @@ type editView struct {
 	passwords             []models.Password
 	selectedItemIndex     int
 	deleteConfirmation    bool
-	width                 int          // Dodane
-	height                int          // Dodane
-	currentKey            *models.Key  // Dodane
-	keys                  []models.Key // Dodane
+	width                 int
+	height                int
+	currentKey            *models.Key
+	keys                  []models.Key
 }
 
 func NewEditView(model *ui.Model) *editView {
@@ -439,6 +441,12 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v.handleNavigationKey(msg.String())
 
 			default:
+				// Obsługa textarea dla trybu edycji klucza
+				if v.mode == modeKeyEdit && v.activeField == 2 {
+					v.keyTextarea, cmd = v.keyTextarea.Update(msg)
+					return v, cmd
+				}
+				// Standardowa obsługa dla innych pól
 				v.inputs[v.activeField], cmd = v.inputs[v.activeField].Update(msg)
 				return v, cmd
 			}
@@ -482,6 +490,7 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return model, cmd
 			}
 			return v, cmd
+
 		case "a":
 			// Ujednolicona obsługa dodawania dla obu list
 			if v.mode == modePasswordList {
@@ -781,21 +790,45 @@ func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 
 	if v.mode == modeKeyEdit {
 		// Validation of key fields
-		if err := v.validateKeyFields(); err != nil {
-			v.errorMsg = err.Error()
+		description := v.inputs[0].Value()
+		path := v.inputs[1].Value()
+		keyData := v.keyTextarea.Value()
+
+		if description == "" {
+			v.errorMsg = "description is required"
 			return v, nil
 		}
+
+		if path != "" && keyData != "" {
+			v.errorMsg = "cannot specify both path and key data"
+			return v, nil
+		}
+
+		if path == "" && keyData == "" {
+			v.errorMsg = "either path or key data must be provided"
+			return v, nil
+		}
+
+		// Dodatkowa walidacja dla klucza SSH
+		if keyData != "" {
+			if !strings.Contains(keyData, "-----BEGIN") || !strings.Contains(keyData, "-----END") {
+				v.errorMsg = "invalid SSH key format"
+				return v, nil
+			}
+		}
+
 		// Create new key
 		key, err := models.NewKey(
-			v.inputs[0].Value(),
-			v.inputs[1].Value(),
-			v.inputs[2].Value(),
+			description,
+			path,
+			keyData,
 			v.model.GetCipher(),
 		)
 		if err != nil {
 			v.errorMsg = err.Error()
 			return v, nil
 		}
+
 		// Update or add key
 		if v.currentKey != nil {
 			err = v.model.UpdateKey(v.currentKey.Description, key)
@@ -840,7 +873,7 @@ func (v *editView) handleSave() (tea.Model, tea.Cmd) {
 
 	// Update UI state
 	v.model.UpdateLists()
-	v.model.SetStatus("Password saved successfully", false)
+	v.model.SetStatus("Configuration saved successfully", false)
 	v.editing = false
 	v.resetState()
 
@@ -1025,8 +1058,11 @@ func (v *editView) initializeKeyInputs() {
 	v.inputs[1].Placeholder = "Key path (optional)"
 	v.inputs[1].CharLimit = 256
 
-	v.inputs[2].Placeholder = "Paste SSH key here (optional)"
-	v.inputs[2].CharLimit = 4096
+	// Inicjalizacja textarea dla klucza
+	v.keyTextarea = textarea.New()
+	v.keyTextarea.Placeholder = "Paste SSH key here (optional)"
+	v.keyTextarea.ShowLineNumbers = false
+	v.keyTextarea.CharLimit = 4096
 
 	// Jeśli edytujemy istniejący klucz
 	if v.currentKey != nil {
@@ -1035,32 +1071,11 @@ func (v *editView) initializeKeyInputs() {
 		if err == nil {
 			v.inputs[1].SetValue(path)
 		}
-		// Celowo nie wczytujemy samego klucza ze względów bezpieczeństwa
 	}
 
 	// Ustaw fokus na pierwsze pole
 	v.activeField = 0
 	v.inputs[0].Focus()
-}
-
-func (v *editView) validateKeyFields() error {
-	description := v.inputs[0].Value()
-	path := v.inputs[1].Value()
-	keyData := v.inputs[2].Value()
-
-	if description == "" {
-		return fmt.Errorf("description is required")
-	}
-
-	if path != "" && keyData != "" {
-		return fmt.Errorf("cannot specify both path and key data")
-	}
-
-	if path == "" && keyData == "" {
-		return fmt.Errorf("either path or key data must be provided")
-	}
-
-	return nil
 }
 
 func (v *editView) renderKeyEdit(width int) string {
@@ -1083,16 +1098,30 @@ func (v *editView) renderKeyEdit(width int) string {
 		"Key Data (optional):",
 	}
 
-	// Renderowanie pól wejściowych
-	for i, input := range v.inputs[:3] {
+	// Renderowanie pól description i path
+	for i := 0; i < 2; i++ {
 		content.WriteString(ui.LabelStyle.Render(labels[i]) + "\n")
-
 		inputStyle := ui.InputStyle.Width(inputWidth)
 		if i == v.activeField {
 			inputStyle = ui.SelectedItemStyle.Width(inputWidth)
 		}
-		content.WriteString(inputStyle.Render(input.View()) + "\n\n")
+		content.WriteString(inputStyle.Render(v.inputs[i].View()) + "\n\n")
 	}
+
+	// Renderowanie textarea dla klucza
+	content.WriteString(ui.LabelStyle.Render(labels[2]) + "\n")
+	v.keyTextarea.SetWidth(inputWidth)
+	v.keyTextarea.SetHeight(10) // Wysokość pola na klucz
+	textareaStyle := ui.InputStyle
+	if v.activeField == 2 {
+		textareaStyle = ui.SelectedItemStyle
+		if !v.keyTextarea.Focused() {
+			v.keyTextarea.Focus()
+		}
+	} else {
+		v.keyTextarea.Blur()
+	}
+	content.WriteString(textareaStyle.Render(v.keyTextarea.View()) + "\n\n")
 
 	// Dodanie informacji pomocniczej
 	content.WriteString(ui.DescriptionStyle.Render(

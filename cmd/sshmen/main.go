@@ -1,11 +1,12 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sshManager/internal/config"
 	"sshManager/internal/crypto"
+	"sshManager/internal/sync"
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
@@ -14,16 +15,7 @@ import (
 	"golang.org/x/term"
 )
 
-type mode int
-
-const (
-	modeConnect mode = iota
-	modeEdit
-	modeTransfer
-)
-
 type programModel struct {
-	mode        mode
 	quitting    bool
 	uiModel     *ui.Model
 	currentView tea.Model
@@ -49,11 +41,11 @@ func initialModel() *programModel {
 	}
 
 	return &programModel{
-		mode:        modeConnect,
 		uiModel:     uiModel,
 		currentView: initialPrompt,
 	}
 }
+
 func (m *programModel) Init() tea.Cmd {
 	return m.currentView.Init()
 }
@@ -83,7 +75,6 @@ func (m *programModel) updateCurrentView() {
 		m.uiModel.SetActiveView(ui.ViewMain)
 	}
 }
-
 func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Sprawdź czy użytkownik chce zakończyć program
 	if m.uiModel.IsQuitting() || m.quitting {
@@ -96,15 +87,39 @@ func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		key := crypto.GenerateKeyFromPassword(string(msg))
 		m.cipher = crypto.NewCipher(string(key))
 		m.uiModel.SetCipher(m.cipher)
+		m.uiModel.GetConfig().SetCipher(m.cipher) // Dodane
 
-		// Przełączenie na główny widok
-		m.updateCurrentView()
+		// Po zainicjowaniu szyfru sprawdzamy czy mamy zapisany klucz API
+		apiKey, err := m.uiModel.GetConfig().LoadApiKey(m.cipher)
+		if err != nil {
+			// Jeśli nie ma klucza API, pokazujemy prompt do jego wprowadzenia
+			m.currentView = views.NewApiKeyPromptModel(m.uiModel.GetConfig().GetConfigPath(), m.cipher)
+			return m, m.currentView.Init()
+		}
 
-		// Inicjalizacja nowego widoku
-		initCmd := m.currentView.Init()
+		// Jeśli mamy klucz API, wykonujemy synchronizację
+		return m, m.handleApiKeyAndSync(apiKey, false)
 
-		// Zwracamy model i komendę inicjalizującą
-		return m, initCmd
+	case messages.ApiKeyEnteredMsg:
+		if msg.LocalMode {
+			// Użytkownik wybrał tryb lokalny (nacisnął ESC)
+			m.uiModel.SetLocalMode(true)
+			m.updateCurrentView()
+			return m, m.currentView.Init()
+		}
+
+		// Zapisz nowy klucz API
+		if err := m.uiModel.GetConfig().SaveApiKey(msg.Key, m.cipher); err != nil {
+			fmt.Printf("Warning: Could not save API key: %v\n", err)
+			m.uiModel.SetLocalMode(true)
+		}
+
+		return m, m.handleApiKeyAndSync(msg.Key, false)
+
+	case messages.ReloadAppMsg:
+		// Zresetuj model i załaduj dane od nowa
+		m.currentView = initialModel().currentView
+		return m, m.currentView.Init()
 
 	default:
 		// Zapisz aktualny widok
@@ -123,6 +138,51 @@ func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m *programModel) handleApiKeyAndSync(apiKey string, isLocalMode bool) tea.Cmd {
+	if isLocalMode {
+		m.uiModel.SetLocalMode(true)
+		m.updateCurrentView()
+		return m.currentView.Init()
+	}
+
+	// Pobranie ścieżek
+	configPath, err := config.GetDefaultConfigPath()
+	if err != nil {
+		fmt.Printf("Warning: Could not determine config path: %v\n", err)
+		configPath = config.DefaultConfigFileName
+	}
+	keysDir := filepath.Join(filepath.Dir(configPath), config.DefaultKeysDir)
+
+	// Tworzenie kopii zapasowych
+	if err := sync.BackupConfigFile(configPath); err != nil {
+		fmt.Printf("Warning: Could not create config backup: %v\n", err)
+	}
+	if err := sync.BackupKeys(keysDir); err != nil {
+		fmt.Printf("Warning: Could not create keys backup: %v\n", err)
+	}
+
+	// Synchronizacja z API
+	syncResp, err := sync.SyncWithAPI(apiKey)
+	if err != nil {
+		fmt.Printf("Warning: Could not sync with API: %v\n", err)
+		m.uiModel.SetLocalMode(true)
+	} else {
+		// Zapisz dane z API - dodajemy przekazanie cipher
+		if err := sync.SaveAPIData(configPath, keysDir, syncResp.Data, m.cipher); err != nil {
+			fmt.Printf("Warning: Could not save API data: %v\n", err)
+			if err := sync.RestoreFromBackup(configPath, keysDir); err != nil {
+				fmt.Printf("Error: Could not restore from backup: %v\n", err)
+				os.Exit(1)
+			}
+			m.uiModel.SetLocalMode(true)
+		}
+	}
+
+	// Przejście do głównego widoku
+	m.updateCurrentView()
+	return m.currentView.Init()
+}
+
 func (m *programModel) View() string {
 	if m.quitting || m.uiModel.IsQuitting() {
 		return "Goodbye!\n"
@@ -131,22 +191,8 @@ func (m *programModel) View() string {
 }
 
 func main() {
-	// Parsowanie flag linii komend
-	editMode := flag.Bool("edit", false, "Edit mode")
-	transferMode := flag.Bool("file-transfer", false, "File transfer mode")
-	flag.Parse()
-
 	// Inicjalizacja modelu programu
 	m := initialModel()
-
-	// Ustawienie początkowego widoku na podstawie flag
-	if *editMode {
-		m.mode = modeEdit
-		m.uiModel.SetActiveView(ui.ViewEdit)
-	} else if *transferMode {
-		m.mode = modeTransfer
-		m.uiModel.SetActiveView(ui.ViewTransfer)
-	}
 
 	// Uruchomienie programu
 	p := tea.NewProgram(m, tea.WithMouseCellMotion(), tea.WithAltScreen())

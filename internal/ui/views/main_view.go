@@ -2,7 +2,11 @@ package views
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sshManager/internal/config"
 	"sshManager/internal/models"
+	"sshManager/internal/sync"
 	"sshManager/internal/ui"
 	"strings"
 	"time"
@@ -221,7 +225,8 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ui.SwitchTheme()
 				return v, nil
 			}
-
+		case "ctrl+r": // lub inny wybrany skrót
+			return v.handleRestoreBackup()
 		case "esc":
 			v.escPressed = true
 			if v.escTimeout != nil {
@@ -567,7 +572,7 @@ func (v *mainView) renderStatusBar() string {
 			status = ui.SuccessStyle.Render(fmt.Sprintf("Connected to: %s", host.Name))
 		}
 	} else {
-		status = ui.DescriptionStyle.Render("No active connection, Press:")
+		status = ui.DescriptionStyle.Render("To restore data from local backup press: CTRL + r")
 	}
 
 	// Renderowanie tabeli poleceń
@@ -616,4 +621,24 @@ func (v *mainView) renderStatusBar() string {
 		Render(fullContent)
 
 	return framed
+}
+
+func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
+	configPath, err := config.GetDefaultConfigPath()
+	if err != nil {
+		v.errMsg = fmt.Sprintf("Could not determine config path: %v", err)
+		return v, nil
+	}
+
+	keysDir := filepath.Join(filepath.Dir(configPath), config.DefaultKeysDir)
+
+	// Pobierz klucz API z konfiguracji lub zmiennej środowiskowej
+	apiKey := os.Getenv("SSHM_API_KEY") // Docelowo powinien być w konfiguracji
+
+	if err := sync.RestoreAndSync(configPath, keysDir, apiKey, v.model.Program); err != nil {
+		v.errMsg = fmt.Sprintf("Error restoring and syncing: %v", err)
+		return v, nil
+	}
+
+	return v, nil
 }

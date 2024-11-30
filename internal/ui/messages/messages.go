@@ -11,4 +11,11 @@ type HostKeyVerificationMsg struct {
 	Fingerprint string
 }
 
+type ApiKeyEnteredMsg struct {
+	Key       string
+	LocalMode bool
+}
+
 type HostKeyResponseMsg bool
+
+type ReloadAppMsg struct{}

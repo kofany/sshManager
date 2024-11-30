@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sshManager/internal/crypto"
 	"sshManager/internal/models"
+	"sshManager/internal/sync"
 	"strings"
 )
 
@@ -19,9 +21,13 @@ const (
 	DefaultKeysDir        = "keys" // Nowa stała
 )
 
+const ApiKeyFileName = "api_key.txt"
+
 type Manager struct {
 	configPath string
 	config     *models.Config
+	cipher     *crypto.Cipher // Dodane
+
 }
 
 // NewManager tworzy nowego menedżera konfiguracji
@@ -80,13 +86,9 @@ func (m *Manager) Load() error {
 }
 
 // Save zapisuje konfigurację do pliku
+// Save zapisuje konfigurację do pliku i synchronizuje z API
 func (m *Manager) Save() error {
-	// Upewnij się, że katalog konfiguracyjny istnieje
-	configDir := filepath.Dir(m.configPath)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %v", err)
-	}
-
+	// Najpierw zapisujemy lokalnie
 	data, err := json.MarshalIndent(m.config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %v", err)
@@ -94,6 +96,16 @@ func (m *Manager) Save() error {
 
 	if err := os.WriteFile(m.configPath, data, DefaultFilePerms); err != nil {
 		return fmt.Errorf("failed to write config file: %v", err)
+	}
+
+	// Jeśli mamy klucz API i nie jesteśmy w trybie lokalnym, synchronizujemy
+	if apiKey, err := m.LoadApiKey(m.cipher); err == nil {
+		keysDir := filepath.Join(filepath.Dir(m.configPath), DefaultKeysDir)
+
+		// Wypychamy dane do API
+		if err := sync.PushToAPI(apiKey, m.configPath, keysDir); err != nil {
+			return fmt.Errorf("failed to sync with API: %v", err)
+		}
 	}
 
 	return nil
@@ -200,6 +212,7 @@ func (m *Manager) GetKeys() []models.Key {
 }
 
 // AddKey dodaje nowy klucz
+// W pliku internal/config/config.go
 func (m *Manager) AddKey(key models.Key) error {
 	// Sprawdź czy klucz o takiej nazwie już istnieje
 	for _, k := range m.config.Keys {
@@ -221,8 +234,8 @@ func (m *Manager) AddKey(key models.Key) error {
 			return fmt.Errorf("failed to create key directory: %v", err)
 		}
 
-		// Zapisz klucz do pliku z odpowiednimi uprawnieniami
-		if err := os.WriteFile(keyPath, []byte(key.KeyData), 0600); err != nil {
+		// Zapisz niezaszyfrowany klucz do pliku
+		if err := os.WriteFile(keyPath, []byte(key.RawKeyData), 0600); err != nil {
 			return fmt.Errorf("failed to write key file: %v", err)
 		}
 	}
@@ -231,7 +244,6 @@ func (m *Manager) AddKey(key models.Key) error {
 	return nil
 }
 
-// UpdateKey aktualizuje istniejący klucz
 // UpdateKey aktualizuje istniejący klucz
 func (m *Manager) UpdateKey(index int, key models.Key) error {
 	if index < 0 || index >= len(m.config.Keys) {
@@ -259,8 +271,8 @@ func (m *Manager) UpdateKey(index int, key models.Key) error {
 			return fmt.Errorf("failed to create key directory: %v", err)
 		}
 
-		// Zapisz nowy klucz do pliku
-		if err := os.WriteFile(keyPath, []byte(key.KeyData), 0600); err != nil {
+		// Zapisz niezaszyfrowany klucz do pliku
+		if err := os.WriteFile(keyPath, []byte(key.RawKeyData), 0600); err != nil {
 			return fmt.Errorf("failed to write key file: %v", err)
 		}
 	}
@@ -300,4 +312,68 @@ func (m *Manager) DeleteKey(index int) error {
 	// Usuń klucz z konfiguracji
 	m.config.Keys = append(m.config.Keys[:index], m.config.Keys[index+1:]...)
 	return nil
+}
+
+// GetApiKeyPath zwraca ścieżkę do pliku z kluczem API
+func (m *Manager) GetApiKeyPath() (string, error) {
+	configDir := filepath.Dir(m.configPath)
+	return filepath.Join(configDir, ApiKeyFileName), nil
+}
+
+// SaveApiKey zapisuje zaszyfrowany klucz API do pliku
+func (m *Manager) SaveApiKey(apiKey string, cipher *crypto.Cipher) error {
+	apiKeyPath, err := m.GetApiKeyPath()
+	if err != nil {
+		return err
+	}
+
+	// Szyfrowanie klucza
+	encryptedKey, err := cipher.Encrypt(apiKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt API key: %v", err)
+	}
+
+	// Zapisanie do pliku
+	return os.WriteFile(apiKeyPath, []byte(encryptedKey), 0600)
+}
+
+// LoadApiKey wczytuje i deszyfruje klucz API
+func (m *Manager) LoadApiKey(cipher *crypto.Cipher) (string, error) {
+	apiKeyPath, err := m.GetApiKeyPath()
+	if err != nil {
+		return "", err
+	}
+
+	// Sprawdzenie czy plik istnieje
+	encryptedKey, err := os.ReadFile(apiKeyPath)
+	if err != nil {
+		return "", fmt.Errorf("api key file not found")
+	}
+
+	// Deszyfrowanie
+	apiKey, err := cipher.Decrypt(string(encryptedKey))
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt API key: %v", err)
+	}
+
+	return apiKey, nil
+}
+
+// RemoveApiKey usuwa plik z kluczem API
+func (m *Manager) RemoveApiKey() error {
+	apiKeyPath, err := m.GetApiKeyPath()
+	if err != nil {
+		return err
+	}
+	return os.Remove(apiKeyPath)
+}
+
+// SetCipher ustawia obiekt szyfru
+func (m *Manager) SetCipher(cipher *crypto.Cipher) {
+	m.cipher = cipher
+}
+
+// GetConfigPath zwraca ścieżkę do pliku konfiguracyjnego
+func (m *Manager) GetConfigPath() string {
+	return m.configPath
 }

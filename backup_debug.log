@@ -1,0 +1,169 @@
+[2024-11-29 23:09:27] === Starting backup operation ===
+[2024-11-29 23:09:27] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-29 23:09:27] Found 3 entries in keys directory
+[2024-11-29 23:09:27] Creating backup: /Users/kfn/.config/sshmen/keys/NewKey.key -> /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:09:27] Successfully created backup for: NewKey.key
+[2024-11-29 23:09:27] Creating backup: /Users/kfn/.config/sshmen/keys/dupaa.key -> /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:09:27] Successfully created backup for: dupaa.key
+[2024-11-29 23:09:27] Creating backup: /Users/kfn/.config/sshmen/keys/test5.key -> /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:09:27] Successfully created backup for: test5.key
+[2024-11-29 23:09:27] === Backup operation completed ===
+
+[2024-11-29 23:09:27] === Starting backup operation ===
+[2024-11-29 23:09:27] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-29 23:09:27] Found 6 entries in keys directory
+[2024-11-29 23:09:27] Removing old backup: /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:09:27] Removing old backup: /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:09:27] Removing old backup: /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:09:27] Creating backup: /Users/kfn/.config/sshmen/keys/NewKey.key -> /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:09:27] Successfully created backup for: NewKey.key
+[2024-11-29 23:09:27] Skipping entry: NewKey.key.old
+[2024-11-29 23:09:27] Creating backup: /Users/kfn/.config/sshmen/keys/dupaa.key -> /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:09:27] Successfully created backup for: dupaa.key
+[2024-11-29 23:09:27] Skipping entry: dupaa.key.old
+[2024-11-29 23:09:27] Creating backup: /Users/kfn/.config/sshmen/keys/test5.key -> /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:09:27] Successfully created backup for: test5.key
+[2024-11-29 23:09:27] Skipping entry: test5.key.old
+[2024-11-29 23:09:27] === Backup operation completed ===
+
+[2024-11-29 23:13:24] === Starting backup operation ===
+[2024-11-29 23:13:24] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-29 23:13:24] Found 3 entries in keys directory
+[2024-11-29 23:13:24] Creating backup: /Users/kfn/.config/sshmen/keys/NewKey.key -> /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:13:24] Successfully created backup for: NewKey.key
+[2024-11-29 23:13:24] Creating backup: /Users/kfn/.config/sshmen/keys/dupaa.key -> /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:13:24] Successfully created backup for: dupaa.key
+[2024-11-29 23:13:24] Creating backup: /Users/kfn/.config/sshmen/keys/test5.key -> /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:13:24] Successfully created backup for: test5.key
+[2024-11-29 23:13:24] === Backup operation completed ===
+
+[2024-11-29 23:27:06] === Starting backup operation ===
+[2024-11-29 23:27:06] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-29 23:27:06] Found 3 entries in keys directory
+[2024-11-29 23:27:06] Creating backup: /Users/kfn/.config/sshmen/keys/NewKey.key -> /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:27:06] Successfully created backup for: NewKey.key
+[2024-11-29 23:27:06] Creating backup: /Users/kfn/.config/sshmen/keys/dupaa.key -> /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:27:06] Successfully created backup for: dupaa.key
+[2024-11-29 23:27:06] Creating backup: /Users/kfn/.config/sshmen/keys/test5.key -> /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:27:06] Successfully created backup for: test5.key
+[2024-11-29 23:27:06] === Backup operation completed ===
+
+[2024-11-29 23:27:06] Removing key file: /Users/kfn/.config/sshmen/keys/NewKey.key
+[2024-11-29 23:27:06] Removing key file: /Users/kfn/.config/sshmen/keys/dupaa.key
+[2024-11-29 23:27:06] Removing key file: /Users/kfn/.config/sshmen/keys/test5.key
+[2024-11-29 23:27:19] === Starting backup operation ===
+[2024-11-29 23:27:19] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-29 23:27:19] Found 6 entries in keys directory
+[2024-11-29 23:27:19] Removing old backup: /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:27:19] Removing old backup: /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:27:19] Removing old backup: /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:27:19] Creating backup: /Users/kfn/.config/sshmen/keys/NewKey.key -> /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-29 23:27:19] Successfully created backup for: NewKey.key
+[2024-11-29 23:27:19] Skipping entry: NewKey.key.old
+[2024-11-29 23:27:19] Creating backup: /Users/kfn/.config/sshmen/keys/dupaa.key -> /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-29 23:27:19] Successfully created backup for: dupaa.key
+[2024-11-29 23:27:19] Skipping entry: dupaa.key.old
+[2024-11-29 23:27:19] Creating backup: /Users/kfn/.config/sshmen/keys/test5.key -> /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-29 23:27:19] Successfully created backup for: test5.key
+[2024-11-29 23:27:19] Skipping entry: test5.key.old
+[2024-11-29 23:27:19] === Backup operation completed ===
+
+[2024-11-29 23:27:19] Removing key file: /Users/kfn/.config/sshmen/keys/NewKey.key
+[2024-11-29 23:27:19] Removing key file: /Users/kfn/.config/sshmen/keys/dupaa.key
+[2024-11-29 23:27:19] Removing key file: /Users/kfn/.config/sshmen/keys/test5.key
+[2024-11-30 06:05:59] === Starting backup operation ===
+[2024-11-30 06:05:59] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-30 06:05:59] Found 4 entries in keys directory
+[2024-11-30 06:05:59] Removing old backup: /Users/kfn/.config/sshmen/keys/NewKey.key.old
+[2024-11-30 06:05:59] Removing old backup: /Users/kfn/.config/sshmen/keys/dupaa.key.old
+[2024-11-30 06:05:59] Removing old backup: /Users/kfn/.config/sshmen/keys/test5.key.old
+[2024-11-30 06:05:59] Creating backup: /Users/kfn/.config/sshmen/keys/Master_Key.key -> /Users/kfn/.config/sshmen/keys/Master_Key.key.old
+[2024-11-30 06:05:59] Successfully created backup for: Master_Key.key
+[2024-11-30 06:05:59] Skipping entry: NewKey.key.old
+[2024-11-30 06:05:59] Skipping entry: dupaa.key.old
+[2024-11-30 06:05:59] Skipping entry: test5.key.old
+[2024-11-30 06:05:59] === Backup operation completed ===
+
+[2024-11-30 06:05:59] Removing key file: /Users/kfn/.config/sshmen/keys/Master_Key.key
+[2024-11-30 06:23:29] === Starting backup operation ===
+[2024-11-30 06:23:29] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-30 06:23:29] Found 3 entries in keys directory
+[2024-11-30 06:23:29] Removing old backup: /Users/kfn/.config/sshmen/keys/Master_Key.key.old
+[2024-11-30 06:23:29] Creating backup: /Users/kfn/.config/sshmen/keys/Master Key.key -> /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 06:23:29] Successfully created backup for: Master Key.key
+[2024-11-30 06:23:29] Skipping entry: Master_Key.key.old
+[2024-11-30 06:23:29] Creating backup: /Users/kfn/.config/sshmen/keys/Test_Key.key -> /Users/kfn/.config/sshmen/keys/Test_Key.key.old
+[2024-11-30 06:23:29] Successfully created backup for: Test_Key.key
+[2024-11-30 06:23:29] === Backup operation completed ===
+
+[2024-11-30 06:23:29] Removing key file: /Users/kfn/.config/sshmen/keys/Master Key.key
+[2024-11-30 06:23:29] Removing key file: /Users/kfn/.config/sshmen/keys/Test_Key.key
+[2024-11-30 06:26:36] === Starting backup operation ===
+[2024-11-30 06:26:36] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-30 06:26:36] Found 4 entries in keys directory
+[2024-11-30 06:26:36] Removing old backup: /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 06:26:36] Removing old backup: /Users/kfn/.config/sshmen/keys/Test_Key.key.old
+[2024-11-30 06:26:36] Creating backup: /Users/kfn/.config/sshmen/keys/Master Key.key -> /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 06:26:36] Successfully created backup for: Master Key.key
+[2024-11-30 06:26:36] Skipping entry: Master Key.key.old
+[2024-11-30 06:26:36] Creating backup: /Users/kfn/.config/sshmen/keys/Test Key.key -> /Users/kfn/.config/sshmen/keys/Test Key.key.old
+[2024-11-30 06:26:36] Successfully created backup for: Test Key.key
+[2024-11-30 06:26:36] Skipping entry: Test_Key.key.old
+[2024-11-30 06:26:36] === Backup operation completed ===
+
+[2024-11-30 06:26:36] Removing key file: /Users/kfn/.config/sshmen/keys/Master Key.key
+[2024-11-30 06:26:36] Removing key file: /Users/kfn/.config/sshmen/keys/Test Key.key
+[2024-11-30 06:28:39] === Starting backup operation ===
+[2024-11-30 06:28:39] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-30 06:28:39] Found 5 entries in keys directory
+[2024-11-30 06:28:39] Removing old backup: /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 06:28:39] Removing old backup: /Users/kfn/.config/sshmen/keys/Test Key.key.old
+[2024-11-30 06:28:39] Creating backup: /Users/kfn/.config/sshmen/keys/Master Key.key -> /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 06:28:39] Successfully created backup for: Master Key.key
+[2024-11-30 06:28:39] Skipping entry: Master Key.key.old
+[2024-11-30 06:28:39] Creating backup: /Users/kfn/.config/sshmen/keys/Test Key.key -> /Users/kfn/.config/sshmen/keys/Test Key.key.old
+[2024-11-30 06:28:39] Successfully created backup for: Test Key.key
+[2024-11-30 06:28:39] Skipping entry: Test Key.key.old
+[2024-11-30 06:28:39] Creating backup: /Users/kfn/.config/sshmen/keys/Test1.key -> /Users/kfn/.config/sshmen/keys/Test1.key.old
+[2024-11-30 06:28:39] Successfully created backup for: Test1.key
+[2024-11-30 06:28:39] === Backup operation completed ===
+
+[2024-11-30 06:28:39] Removing key file: /Users/kfn/.config/sshmen/keys/Master Key.key
+[2024-11-30 06:28:39] Removing key file: /Users/kfn/.config/sshmen/keys/Test Key.key
+[2024-11-30 06:28:39] Removing key file: /Users/kfn/.config/sshmen/keys/Test1.key
+[2024-11-30 06:33:30] === Starting backup operation ===
+[2024-11-30 06:33:30] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-30 06:33:30] Found 8 entries in keys directory
+[2024-11-30 06:33:30] Removing old backup: /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 06:33:30] Removing old backup: /Users/kfn/.config/sshmen/keys/Test Key.key.old
+[2024-11-30 06:33:30] Removing old backup: /Users/kfn/.config/sshmen/keys/Test1.key.old
+[2024-11-30 06:33:30] Creating backup: /Users/kfn/.config/sshmen/keys/.#Test2.key -> /Users/kfn/.config/sshmen/keys/.#Test2.key.old
+[2024-11-30 06:33:30] Error reading file /Users/kfn/.config/sshmen/keys/.#Test2.key: open /Users/kfn/.config/sshmen/keys/.#Test2.key: no such file or directory
+[2024-11-30 06:33:30] Removing key file: /Users/kfn/.config/sshmen/keys/.#Test2.key
+[2024-11-30 06:33:30] Removing key file: /Users/kfn/.config/sshmen/keys/Master Key.key
+[2024-11-30 06:33:30] Removing key file: /Users/kfn/.config/sshmen/keys/Test Key.key
+[2024-11-30 06:33:30] Removing key file: /Users/kfn/.config/sshmen/keys/Test1.key
+[2024-11-30 06:33:30] Removing key file: /Users/kfn/.config/sshmen/keys/Test2.key
+[2024-11-30 07:24:02] === Starting backup operation ===
+[2024-11-30 07:24:02] Keys directory: /Users/kfn/.config/sshmen/keys
+[2024-11-30 07:24:02] Found 6 entries in keys directory
+[2024-11-30 07:24:02] Creating backup: /Users/kfn/.config/sshmen/keys/Master Key.key -> /Users/kfn/.config/sshmen/keys/Master Key.key.old
+[2024-11-30 07:24:02] Successfully created backup for: Master Key.key
+[2024-11-30 07:24:02] Creating backup: /Users/kfn/.config/sshmen/keys/Test Key.key -> /Users/kfn/.config/sshmen/keys/Test Key.key.old
+[2024-11-30 07:24:02] Successfully created backup for: Test Key.key
+[2024-11-30 07:24:02] Creating backup: /Users/kfn/.config/sshmen/keys/Test1.key -> /Users/kfn/.config/sshmen/keys/Test1.key.old
+[2024-11-30 07:24:02] Successfully created backup for: Test1.key
+[2024-11-30 07:24:02] Creating backup: /Users/kfn/.config/sshmen/keys/Test2.key -> /Users/kfn/.config/sshmen/keys/Test2.key.old
+[2024-11-30 07:24:02] Successfully created backup for: Test2.key
+[2024-11-30 07:24:02] Creating backup: /Users/kfn/.config/sshmen/keys/Test3.key -> /Users/kfn/.config/sshmen/keys/Test3.key.old
+[2024-11-30 07:24:02] Successfully created backup for: Test3.key
+[2024-11-30 07:24:02] Creating backup: /Users/kfn/.config/sshmen/keys/Test4.key -> /Users/kfn/.config/sshmen/keys/Test4.key.old
+[2024-11-30 07:24:02] Successfully created backup for: Test4.key
+[2024-11-30 07:24:02] === Backup operation completed ===
+
+[2024-11-30 07:24:02] Removing key file: /Users/kfn/.config/sshmen/keys/Master Key.key
+[2024-11-30 07:24:02] Removing key file: /Users/kfn/.config/sshmen/keys/Test Key.key
+[2024-11-30 07:24:02] Removing key file: /Users/kfn/.config/sshmen/keys/Test1.key
+[2024-11-30 07:24:02] Removing key file: /Users/kfn/.config/sshmen/keys/Test2.key
+[2024-11-30 07:24:02] Removing key file: /Users/kfn/.config/sshmen/keys/Test3.key
+[2024-11-30 07:24:02] Removing key file: /Users/kfn/.config/sshmen/keys/Test4.key

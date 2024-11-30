@@ -14,6 +14,7 @@ type Key struct {
 	Description string `json:"description"`
 	Path        string `json:"path,omitempty"`     // Ścieżka do klucza (jeśli używamy zewnętrznego)
 	KeyData     string `json:"key_data,omitempty"` // Zawartość klucza (jeśli przechowujemy lokalnie)
+	RawKeyData  string `json:"-"`                  // Niezaszyfrowane dane klucza - nie zapisywane do JSON
 }
 
 const (
@@ -21,6 +22,7 @@ const (
 	KeyPrefix    = "K" // Dodane
 )
 
+// NewKey tworzy nową instancję Key
 // NewKey tworzy nową instancję Key
 func NewKey(description string, path string, keyData string, cipher *crypto.Cipher) (*Key, error) {
 	if description == "" {
@@ -37,21 +39,29 @@ func NewKey(description string, path string, keyData string, cipher *crypto.Ciph
 		return nil, errors.New("either path or key data must be provided")
 	}
 
-	// Jeśli podano dane klucza, szyfrujemy je
-	var encryptedKey string
+	key := &Key{
+		Description: description,
+		Path:        path,
+		RawKeyData:  keyData, // Zachowujemy oryginalne dane
+	}
+
+	// Jeśli podano dane klucza, szyfrujemy je dla KeyData (do zapisu w konfiguracji/API)
 	if keyData != "" {
-		var err error
-		encryptedKey, err = cipher.Encrypt(keyData)
+		encryptedKey, err := cipher.Encrypt(keyData)
 		if err != nil {
 			return nil, err
 		}
+		key.KeyData = encryptedKey
 	}
 
-	return &Key{
-		Description: description,
-		Path:        path,
-		KeyData:     encryptedKey,
-	}, nil
+	// Od razu zapisz plik klucza jeśli mamy RawKeyData
+	if key.RawKeyData != "" {
+		if err := key.SaveKeyToFile(); err != nil {
+			return nil, fmt.Errorf("failed to save key file: %v", err)
+		}
+	}
+
+	return key, nil
 }
 
 // Validate sprawdza poprawność danych Key
@@ -120,4 +130,29 @@ func (k *Key) Clone() *Key {
 		Path:        k.Path,
 		KeyData:     k.KeyData,
 	}
+}
+
+// SaveKeyToFile zapisuje niezaszyfrowaną zawartość klucza do pliku
+func (k *Key) SaveKeyToFile() error {
+	if k.RawKeyData == "" {
+		return errors.New("no raw key data to save")
+	}
+
+	keyPath, err := k.GetKeyPath()
+	if err != nil {
+		return fmt.Errorf("failed to get key path: %v", err)
+	}
+
+	// Upewnij się, że katalog istnieje
+	keyDir := filepath.Dir(keyPath)
+	if err := os.MkdirAll(keyDir, 0700); err != nil {
+		return fmt.Errorf("failed to create key directory: %v", err)
+	}
+
+	// Zapisz niezaszyfrowane dane
+	if err := os.WriteFile(keyPath, []byte(k.RawKeyData), 0600); err != nil {
+		return fmt.Errorf("failed to write key file: %v", err)
+	}
+
+	return nil
 }

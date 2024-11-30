@@ -1434,8 +1434,8 @@ var helpText = `
 
 func (v *transferView) renderShortcuts() string {
 	// Nagłówki tabeli i skróty
-	headers := []string{"Switch Panel", "Select", "Copy", "Rename", "MkDir", "Delete", "Help", "Exit"}
-	shortcuts := []string{"[Tab]", "[s]", "[F5|ESC+5|c]", "[F6|ESC+6|r]", "[F7|ESC+7|m]", "[F8|ESC+8|d]", "[F1]", "[q|ESC+0]"}
+	headers := []string{"Switch Panel", "Select", "Copy", "Rename", "MkDir", "Delete", "Help", "Theme", "Exit"}
+	shortcuts := []string{"[Tab]", "[s]", "[F5|ESC+5|c]", "[F6|ESC+6|r]", "[F7|ESC+7|m]", "[F8|ESC+8|d]", "[F1]", "[space]", "[q|ESC+0]"}
 
 	// Funkcja stylizująca kolumny
 	var TableStyle = func(row, col int) lipgloss.Style {
