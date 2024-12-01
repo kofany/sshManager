@@ -770,31 +770,6 @@ func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, tra
 	return nil
 }
 
-// deleteFile usuwa wybrany plik
-// deleteFile usuwa wybrany plik lub katalog
-func (v *transferView) deleteFile() error {
-	panel := v.getActivePanel()
-	if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
-		return fmt.Errorf("no file selected")
-	}
-
-	entry := panel.entries[panel.selectedIndex]
-	if entry.name == ".." {
-		return fmt.Errorf("cannot delete parent directory reference")
-	}
-
-	// Dostosuj komunikat w zależności od typu
-	itemType := "file"
-	if entry.isDir {
-		itemType = "directory"
-	}
-
-	// Potwierdź usunięcie z odpowiednim komunikatem
-	v.statusMessage = fmt.Sprintf("Delete %s '%s'? (y/n)", itemType, entry.name)
-
-	return nil
-}
-
 // executeDelete wykonuje faktyczne usuwanie pliku
 func (v *transferView) executeDelete() error {
 	panel := v.getActivePanel()
@@ -1151,12 +1126,29 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "8":
 				if !v.transferring {
-					if err := v.deleteFile(); err != nil {
-						v.handleError(err)
+					panel := v.getActivePanel()
+					if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
+						return v, nil
 					}
+					entry := panel.entries[panel.selectedIndex]
+					if entry.name == ".." {
+						return v, nil
+					}
+					v.popup = components.NewPopup(
+						components.PopupDelete,
+						"Delete",
+						fmt.Sprintf("Delete %s '%s'? (y/n)",
+							map[bool]string{true: "directory", false: "file"}[entry.isDir],
+							entry.name),
+						50,
+						7,
+						v.width,
+						v.height,
+					)
 				}
+				return v, nil
 			}
-			// Reset stanu ESC
+			// Reset stan}u ESC
 			v.escPressed = false
 			if v.escTimeout != nil {
 				v.escTimeout.Stop()
@@ -1317,32 +1309,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		case "ctrl+r":
-			if err := v.updateLocalPanel(); err != nil {
-				v.popup = components.NewPopup(
-					components.PopupMessage,
-					"Error",
-					fmt.Sprintf("Failed to update local panel: %v", err),
-					50,
-					7,
-					v.width,
-					v.height,
-				)
-			}
-			if v.connected {
-				if err := v.updateRemotePanel(); err != nil {
-					v.popup = components.NewPopup(
-						components.PopupMessage,
-						"Error",
-						fmt.Sprintf("Failed to update remote panel: %v", err),
-						50,
-						7,
-						v.width,
-						v.height,
-					)
-				}
-			}
-			return v, nil
 		}
 
 	case ssh.TransferProgress:

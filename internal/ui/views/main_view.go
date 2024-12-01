@@ -480,28 +480,48 @@ func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
 	host := v.hosts[v.selectedIndex]
 	v.model.SetSelectedHost(&host)
 
-	passwords := v.model.GetPasswords()
-	if host.PasswordID >= len(passwords) {
-		v.errMsg = "Invalid password ID"
-		return v, nil
-	}
+	var authData string
+	var err error
 
-	password := passwords[host.PasswordID]
-	decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-	if err != nil {
-		v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
-		return v, nil
+	if host.PasswordID < 0 {
+		// Obsługa klucza SSH
+		keyIndex := -(host.PasswordID + 1) // Konwertujemy ujemny indeks na właściwy indeks klucza
+		keys := v.model.GetKeys()
+		if keyIndex >= len(keys) {
+			v.errMsg = "Invalid SSH key ID"
+			return v, nil
+		}
+
+		key := keys[keyIndex]
+		keyPath, err := key.GetKeyPath()
+		if err != nil {
+			v.errMsg = fmt.Sprintf("Failed to get key path: %v", err)
+			return v, nil
+		}
+		authData = keyPath
+	} else {
+		// Obsługa hasła
+		passwords := v.model.GetPasswords()
+		if host.PasswordID >= len(passwords) {
+			v.errMsg = "Invalid password ID"
+			return v, nil
+		}
+		password := passwords[host.PasswordID]
+		authData, err = password.GetDecrypted(v.model.GetCipher())
+		if err != nil {
+			v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
+			return v, nil
+		}
 	}
 
 	transfer := v.model.GetTransfer()
-	if err := transfer.Connect(&host, decryptedPass); err != nil {
+	if err := transfer.Connect(&host, authData); err != nil {
 		v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
 		return v, nil
 	}
 
 	v.model.SetActiveView(ui.ViewTransfer)
 
-	// Dodajemy sequence komend
 	return v, tea.Sequence(
 		tea.ClearScreen,
 		func() tea.Msg {

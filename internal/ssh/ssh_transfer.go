@@ -3,29 +3,35 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
 
+	scp "github.com/bramvdbogaerde/go-scp"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
+// FileTransfer represents a file transfer session
 type FileTransfer struct {
+	sshClient   *ssh.Client
+	scpClient   scp.Client
 	sftpClient  *sftp.Client
-	sshClient   *ssh.Client // To jest natywny klient golang.org/x/crypto/ssh
 	currentHost *models.Host
 	cipher      *crypto.Cipher
 	connected   bool
+	mutex       sync.Mutex
 }
 
-// TransferProgress reprezentuje postęp transferu pliku
+// TransferProgress represents the progress of a file transfer
 type TransferProgress struct {
 	FileName         string
 	TotalBytes       int64
@@ -33,7 +39,7 @@ type TransferProgress struct {
 	StartTime        time.Time
 }
 
-// NewFileTransfer tworzy nową instancję FileTransfer
+// NewFileTransfer creates a new instance of FileTransfer
 func NewFileTransfer(cipher *crypto.Cipher) *FileTransfer {
 	return &FileTransfer{
 		cipher:    cipher,
@@ -41,33 +47,62 @@ func NewFileTransfer(cipher *crypto.Cipher) *FileTransfer {
 	}
 }
 
-// Connect nawiązuje połączenie SFTP
-func (ft *FileTransfer) Connect(host *models.Host, password string) error {
+// Connect establishes an SSH, SCP, and SFTP connection
+func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if ft.connected {
 		return nil
 	}
 
+	var authMethod ssh.AuthMethod
+	if host.PasswordID < 0 {
+		// Using SSH key authentication
+		key, err := os.ReadFile(authData)
+		if err != nil {
+			return fmt.Errorf("failed to read SSH key: %v", err)
+		}
+		signer, err := ssh.ParsePrivateKey(key)
+		if err != nil {
+			return fmt.Errorf("failed to parse SSH key: %v", err)
+		}
+		authMethod = ssh.PublicKeys(signer)
+	} else {
+		// Using password authentication
+		authMethod = ssh.Password(authData)
+	}
+
 	config := &ssh.ClientConfig{
-		User: host.Login,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(password),
-		},
+		User:            host.Login,
+		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second,
 	}
 
 	addr := fmt.Sprintf("%s:%s", host.IP, host.Port)
 	sshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return fmt.Errorf("failed to dial: %v", err)
+		return fmt.Errorf("failed to connect: %v", err)
 	}
 
+	// Create SCP client using existing SSH connection
+	scpClient, err := scp.NewClientBySSH(sshClient)
+	if err != nil {
+		sshClient.Close()
+		return fmt.Errorf("failed to create SCP client: %v", err)
+	}
+
+	// Create SFTP client for directory operations
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
+		scpClient.Close()
 		sshClient.Close()
 		return fmt.Errorf("failed to create SFTP client: %v", err)
 	}
 
 	ft.sshClient = sshClient
+	ft.scpClient = scpClient
 	ft.sftpClient = sftpClient
 	ft.currentHost = host
 	ft.connected = true
@@ -75,37 +110,64 @@ func (ft *FileTransfer) Connect(host *models.Host, password string) error {
 	return nil
 }
 
-// Disconnect zamyka połączenie SFTP
+// Disconnect closes the SCP, SFTP, and SSH connections
 func (ft *FileTransfer) Disconnect() error {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
+	var errors []string
+
+	// Close the SCP client
+	ft.scpClient.Close()
+
+	// Close the SFTP client
 	if ft.sftpClient != nil {
 		if err := ft.sftpClient.Close(); err != nil {
-			return fmt.Errorf("error closing SFTP client: %v", err)
+			errors = append(errors, fmt.Sprintf("SFTP client close error: %v", err))
 		}
 		ft.sftpClient = nil
 	}
+
+	// Close the SSH client
 	if ft.sshClient != nil {
 		if err := ft.sshClient.Close(); err != nil {
-			return fmt.Errorf("error closing SSH client: %v", err)
+			errors = append(errors, fmt.Sprintf("SSH client close error: %v", err))
 		}
 		ft.sshClient = nil
 	}
+
 	ft.connected = false
+	ft.currentHost = nil
+
+	if len(errors) > 0 {
+		return fmt.Errorf("disconnect errors: %s", strings.Join(errors, "; "))
+	}
 	return nil
 }
 
-// ListLocalFiles zwraca listę plików w lokalnym katalogu
+// IsConnected checks if the SSH connection is active
+func (ft *FileTransfer) IsConnected() bool {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+	return ft.connected
+}
+
+// ListLocalFiles returns a list of files in the local directory
 func (ft *FileTransfer) ListLocalFiles(path string) ([]os.FileInfo, error) {
 	dir, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open local directory: %v", err)
 	}
 	defer dir.Close()
 
 	return dir.Readdir(-1)
 }
 
-// ListRemoteFiles zwraca listę plików w zdalnym katalogu
+// ListRemoteFiles returns a list of files in the remote directory
 func (ft *FileTransfer) ListRemoteFiles(path string) ([]os.FileInfo, error) {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return nil, fmt.Errorf("not connected")
 	}
@@ -113,8 +175,11 @@ func (ft *FileTransfer) ListRemoteFiles(path string) ([]os.FileInfo, error) {
 	return ft.sftpClient.ReadDir(path)
 }
 
-// GetRemoteFileInfo zwraca informacje o zdalnym pliku
+// GetRemoteFileInfo returns information about a remote file
 func (ft *FileTransfer) GetRemoteFileInfo(path string) (os.FileInfo, error) {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return nil, fmt.Errorf("not connected")
 	}
@@ -122,8 +187,11 @@ func (ft *FileTransfer) GetRemoteFileInfo(path string) (os.FileInfo, error) {
 	return ft.sftpClient.Stat(path)
 }
 
-// CreateRemoteDirectory tworzy katalog na zdalnym serwerze
+// CreateRemoteDirectory creates a directory on the remote server
 func (ft *FileTransfer) CreateRemoteDirectory(path string) error {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return fmt.Errorf("not connected")
 	}
@@ -131,24 +199,39 @@ func (ft *FileTransfer) CreateRemoteDirectory(path string) error {
 	return ft.sftpClient.MkdirAll(path)
 }
 
-// RemoveRemoteFile usuwa plik lub katalog na zdalnym serwerze
+// RemoveRemoteFile removes a file or directory on the remote server
 func (ft *FileTransfer) RemoveRemoteFile(path string) error {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return fmt.Errorf("not connected")
 	}
 
-	// Najpierw spróbuj usunąć jako plik
+	// First, try to remove as a file
 	err := ft.sftpClient.Remove(path)
 	if err == nil {
 		return nil
 	}
 
-	// Jeśli nie udało się usunąć jako pliku, spróbuj usunąć jako katalog
-	return ft.sftpClient.RemoveDirectory(path)
+	// If it fails, check if it's a directory
+	info, err := ft.sftpClient.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %v", err)
+	}
+
+	if info.IsDir() {
+		return ft.RemoveRemoteDirectoryRecursive(path)
+	}
+
+	return fmt.Errorf("failed to remove file: %v", err)
 }
 
-// RenameRemoteFile zmienia nazwę pliku na zdalnym serwerze
+// RenameRemoteFile renames a file on the remote server
 func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return fmt.Errorf("not connected")
 	}
@@ -156,210 +239,144 @@ func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
 	return ft.sftpClient.Rename(oldPath, newPath)
 }
 
-func (ft *FileTransfer) IsConnected() bool {
-	return ft.connected && ft.sftpClient != nil
-}
-
-// internal/ssh/ssh_transfer.go
-
-func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
-	if !ft.connected {
-		return fmt.Errorf("not connected")
-	}
-
-	srcFile, err := os.Open(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to open local file: %v", err)
-	}
-	defer srcFile.Close()
-
-	dstFile, err := ft.sftpClient.Create(remotePath)
-	if err != nil {
-		return fmt.Errorf("failed to create remote file: %v", err)
-	}
-	defer dstFile.Close()
-
-	fileInfo, err := srcFile.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %v", err)
-	}
-
-	progress := TransferProgress{
-		FileName:   filepath.Base(localPath),
-		TotalBytes: fileInfo.Size(),
-		StartTime:  time.Now(),
-	}
-
-	bufSize := 128 * 1024 // Zwiększenie rozmiaru bufora do 128 KB
-	buf := make([]byte, bufSize)
-	for {
-		n, err := srcFile.Read(buf)
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("error reading local file: %v", err)
-		}
-
-		if n > 0 {
-			written, writeErr := dstFile.Write(buf[:n])
-			if writeErr != nil {
-				return fmt.Errorf("error writing remote file: %v", writeErr)
-			}
-			if written != n {
-				return fmt.Errorf("incomplete write: wrote %d bytes instead of %d", written, n)
-			}
-
-			progress.TransferredBytes += int64(n)
-			if progressChan != nil {
-				select {
-				case progressChan <- progress:
-				default:
-				}
-			}
-		}
-
-		if err == io.EOF {
-			break
-		}
-	}
-
-	// Upewnij się, że dane zostały zapisane na zdalnym dysku
-	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync remote file: %v", err)
-	}
-
-	// Wyślij końcową aktualizację postępu
-	if progressChan != nil {
-		select {
-		case progressChan <- progress:
-		default:
-		}
-	}
-
-	return nil
-}
-
-// internal/ssh/ssh_transfer.go
-
-func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan chan<- TransferProgress) error {
-	if !ft.connected {
-		return fmt.Errorf("not connected")
-	}
-
-	srcFile, err := ft.sftpClient.Open(remotePath)
-	if err != nil {
-		return fmt.Errorf("failed to open remote file: %v", err)
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to create local file: %v", err)
-	}
-	defer dstFile.Close()
-
-	fileInfo, err := srcFile.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %v", err)
-	}
-
-	progress := TransferProgress{
-		FileName:   filepath.Base(remotePath),
-		TotalBytes: fileInfo.Size(),
-		StartTime:  time.Now(),
-	}
-
-	bufSize := 128 * 1024 // Zwiększenie rozmiaru bufora do 128 KB
-	buf := make([]byte, bufSize)
-	for {
-		n, err := srcFile.Read(buf)
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("error reading remote file: %v", err)
-		}
-
-		if n > 0 {
-			written, writeErr := dstFile.Write(buf[:n])
-			if writeErr != nil {
-				return fmt.Errorf("error writing local file: %v", writeErr)
-			}
-			if written != n {
-				return fmt.Errorf("incomplete write: wrote %d bytes instead of %d", written, n)
-			}
-
-			progress.TransferredBytes += int64(n)
-			if progressChan != nil {
-				select {
-				case progressChan <- progress:
-				default:
-				}
-			}
-		}
-
-		if err == io.EOF {
-			break
-		}
-	}
-
-	// Upewnij się, że dane zostały zapisane na lokalnym dysku
-	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync local file: %v", err)
-	}
-
-	// Wyślij końcową aktualizację postępu
-	if progressChan != nil {
-		select {
-		case progressChan <- progress:
-		default:
-		}
-	}
-
-	return nil
-}
-
-// Dodaj na końcu pliku internal/ssh/ssh_transfer.go
-
+// GetRemoteHomeDir returns the home directory on the remote server
 func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return "", fmt.Errorf("not connected")
 	}
 
 	session, err := ft.sshClient.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("failed to create session: %v", err)
+		return "", fmt.Errorf("failed to create SSH session: %v", err)
 	}
 	defer session.Close()
 
 	output, err := session.Output("echo $HOME")
 	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %v", err)
+		return "", fmt.Errorf("failed to execute command: %v", err)
 	}
 
-	// Usuń znak nowej linii z końca
-	homeDir := strings.TrimSpace(string(output))
-	return homeDir, nil
+	return strings.TrimSpace(string(output)), nil
 }
 
-// RemoveRemoteDirectoryRecursive usuwa katalog rekursywnie
+// UploadFile uploads a file to the server using SCP
+func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
+	ft.mutex.Lock()
+	if !ft.connected {
+		ft.mutex.Unlock()
+		return fmt.Errorf("not connected")
+	}
+	ft.mutex.Unlock()
+
+	// Open local file
+	localFile, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open local file: %v", err)
+	}
+	defer localFile.Close()
+
+	// Get file info for permissions
+	fileInfo, err := localFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat local file: %v", err)
+	}
+
+	// Set permissions (convert to string in octal)
+	perm := fmt.Sprintf("%#o", fileInfo.Mode().Perm())
+
+	// Start time for progress
+	startTime := time.Now()
+
+	// Prepare context
+	ctx := context.Background()
+
+	// Define PassThru function for progress reporting
+	passThru := func(r io.Reader, total int64) io.Reader {
+		return &ProgressReader{
+			Reader:    r,
+			Total:     total,
+			FileName:  filepath.Base(localPath),
+			StartTime: startTime,
+			Progress:  progressChan,
+		}
+	}
+
+	// Copy file to remote server
+	err = ft.scpClient.CopyFilePassThru(ctx, localFile, remotePath, perm, passThru)
+	if err != nil {
+		return fmt.Errorf("error while uploading file: %v", err)
+	}
+
+	return nil
+}
+
+// DownloadFile downloads a file from the server using SCP
+func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan chan<- TransferProgress) error {
+	ft.mutex.Lock()
+	if !ft.connected {
+		ft.mutex.Unlock()
+		return fmt.Errorf("not connected")
+	}
+	ft.mutex.Unlock()
+
+	// Open local file for writing
+	localFile, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create local file: %v", err)
+	}
+	defer localFile.Close()
+
+	// Start time for progress
+	startTime := time.Now()
+
+	// Prepare context
+	ctx := context.Background()
+
+	// Define PassThru function for progress reporting
+	passThru := func(r io.Reader, total int64) io.Reader {
+		return &ProgressReader{
+			Reader:    r,
+			Total:     total,
+			FileName:  filepath.Base(remotePath),
+			StartTime: startTime,
+			Progress:  progressChan,
+		}
+	}
+
+	// Copy file from remote server
+	err = ft.scpClient.CopyFromRemotePassThru(ctx, localFile, remotePath, passThru)
+	if err != nil {
+		return fmt.Errorf("error while downloading file: %v", err)
+	}
+
+	return nil
+}
+
+// RemoveRemoteDirectoryRecursive removes a directory recursively on the remote server
 func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
+	ft.mutex.Lock()
+	defer ft.mutex.Unlock()
+
 	if !ft.connected {
 		return fmt.Errorf("not connected")
 	}
 
-	entries, err := ft.ListRemoteFiles(path)
+	entries, err := ft.sftpClient.ReadDir(path)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
 	for _, entry := range entries {
-		if entry.Name() == "." || entry.Name() == ".." {
-			continue
-		}
-
 		fullPath := filepath.Join(path, entry.Name())
 		if entry.IsDir() {
 			if err := ft.RemoveRemoteDirectoryRecursive(fullPath); err != nil {
 				return err
 			}
 		} else {
-			if err := ft.RemoveRemoteFile(fullPath); err != nil {
+			if err := ft.sftpClient.Remove(fullPath); err != nil {
 				return err
 			}
 		}
@@ -368,17 +385,22 @@ func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
 	return ft.sftpClient.RemoveDirectory(path)
 }
 
-// UploadDirectory kopiuje cały katalog na serwer
+// UploadDirectory uploads an entire directory to the server
 func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressChan chan<- TransferProgress) error {
+	ft.mutex.Lock()
 	if !ft.connected {
+		ft.mutex.Unlock()
 		return fmt.Errorf("not connected")
 	}
+	ft.mutex.Unlock()
 
+	// Create the destination directory
 	if err := ft.CreateRemoteDirectory(remotePath); err != nil {
 		return fmt.Errorf("failed to create remote directory: %v", err)
 	}
 
-	return filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+	// Walk through the directory and transfer files
+	err := filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -393,30 +415,39 @@ func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressCh
 		if info.IsDir() {
 			return ft.CreateRemoteDirectory(remotePathFull)
 		}
+
 		return ft.UploadFile(path, remotePathFull, progressChan)
 	})
-}
 
-// DownloadDirectory kopiuje cały katalog z serwera
-func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progressChan chan<- TransferProgress) error {
-	if !ft.connected {
-		return fmt.Errorf("not connected")
+	if err != nil {
+		return fmt.Errorf("failed to upload directory: %v", err)
 	}
 
+	return nil
+}
+
+// DownloadDirectory downloads a directory from the server
+func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progressChan chan<- TransferProgress) error {
+	ft.mutex.Lock()
+	if !ft.connected {
+		ft.mutex.Unlock()
+		return fmt.Errorf("not connected")
+	}
+	ft.mutex.Unlock()
+
+	// Create local directory
 	if err := os.MkdirAll(localPath, 0755); err != nil {
 		return fmt.Errorf("failed to create local directory: %v", err)
 	}
 
-	entries, err := ft.ListRemoteFiles(remotePath)
+	// Get list of files
+	entries, err := ft.sftpClient.ReadDir(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
+	// Process each file/directory
 	for _, entry := range entries {
-		if entry.Name() == "." || entry.Name() == ".." {
-			continue
-		}
-
 		remoteSrcPath := filepath.Join(remotePath, entry.Name())
 		localDstPath := filepath.Join(localPath, entry.Name())
 
@@ -432,4 +463,40 @@ func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progress
 	}
 
 	return nil
+}
+
+// ProgressReader wraps an io.Reader to report progress
+type ProgressReader struct {
+	Reader         io.Reader
+	Total          int64
+	Transferred    int64
+	FileName       string
+	StartTime      time.Time
+	Progress       chan<- TransferProgress
+	LastReportTime time.Time
+}
+
+func (pr *ProgressReader) Read(p []byte) (n int, err error) {
+	n, err = pr.Reader.Read(p)
+	pr.Transferred += int64(n)
+
+	// Report progress every second or when done
+	now := time.Now()
+	if now.Sub(pr.LastReportTime) >= time.Second || err == io.EOF {
+		pr.LastReportTime = now
+		progress := TransferProgress{
+			FileName:         pr.FileName,
+			TotalBytes:       pr.Total,
+			TransferredBytes: pr.Transferred,
+			StartTime:        pr.StartTime,
+		}
+		if pr.Progress != nil {
+			select {
+			case pr.Progress <- progress:
+			default:
+			}
+		}
+	}
+
+	return n, err
 }
