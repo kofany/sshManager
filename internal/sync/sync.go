@@ -11,7 +11,6 @@ import (
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
 	"strconv"
-	"time"
 )
 
 const (
@@ -50,45 +49,22 @@ func BackupConfigFile(configPath string) error {
 	return nil
 }
 
-// BackupKeys tworzy kopie wszystkich kluczy
 func BackupKeys(keysDir string) error {
-	// Otwórz plik logów
-	logFile, err := os.OpenFile("backup_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("cannot create log file: %v", err)
-	}
-	defer logFile.Close()
-
-	// Funkcja pomocnicza do logowania
-	logDebug := func(message string) {
-		timestamp := time.Now().Format("2006-01-02 15:04:05")
-		fmt.Fprintf(logFile, "[%s] %s\n", timestamp, message)
-	}
-
-	logDebug("=== Starting backup operation ===")
-	logDebug(fmt.Sprintf("Keys directory: %s", keysDir))
-
 	// Sprawdź czy katalog kluczy istnieje
 	if _, err := os.Stat(keysDir); os.IsNotExist(err) {
-		logDebug("Keys directory does not exist")
 		return nil
 	}
 
 	entries, err := os.ReadDir(keysDir)
 	if err != nil {
-		logDebug(fmt.Sprintf("Error reading keys directory: %v", err))
 		return fmt.Errorf("error reading keys directory: %v", err)
 	}
-
-	logDebug(fmt.Sprintf("Found %d entries in keys directory", len(entries)))
 
 	// Najpierw usuń stare backupy (.old)
 	for _, entry := range entries {
 		if filepath.Ext(entry.Name()) == ".old" {
 			oldPath := filepath.Join(keysDir, entry.Name())
-			logDebug(fmt.Sprintf("Removing old backup: %s", oldPath))
 			if err := os.Remove(oldPath); err != nil {
-				logDebug(fmt.Sprintf("Error removing old backup %s: %v", oldPath, err))
 				return fmt.Errorf("error removing old backup %s: %v", entry.Name(), err)
 			}
 		}
@@ -97,29 +73,22 @@ func BackupKeys(keysDir string) error {
 	// Teraz twórz nowe backupy
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) == ".old" {
-			logDebug(fmt.Sprintf("Skipping entry: %s", entry.Name()))
 			continue
 		}
 
 		originalPath := filepath.Join(keysDir, entry.Name())
 		backupPath := originalPath + ".old"
 
-		logDebug(fmt.Sprintf("Creating backup: %s -> %s", originalPath, backupPath))
-
 		content, err := os.ReadFile(originalPath)
 		if err != nil {
-			logDebug(fmt.Sprintf("Error reading file %s: %v", originalPath, err))
 			return fmt.Errorf("error reading key file %s: %v", entry.Name(), err)
 		}
 
 		if err := os.WriteFile(backupPath, content, 0600); err != nil {
-			logDebug(fmt.Sprintf("Error creating backup file %s: %v", backupPath, err))
 			return fmt.Errorf("error creating key backup %s: %v", entry.Name(), err)
 		}
-		logDebug(fmt.Sprintf("Successfully created backup for: %s", entry.Name()))
 	}
 
-	logDebug("=== Backup operation completed ===\n")
 	return nil
 }
 
@@ -229,10 +198,8 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 
 		keyPath := filepath.Join(keysDir, entry.Name())
 		if err := os.Remove(keyPath); err != nil {
-			logToFile(fmt.Sprintf("Error removing key file %s: %v", keyPath, err))
 			return fmt.Errorf("error removing key file %s: %v", entry.Name(), err)
 		}
-		logToFile(fmt.Sprintf("Removed key file: %s", keyPath))
 	}
 
 	// Odtwórz katalog kluczy i zapisz nowe klucze
@@ -260,7 +227,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
 			return fmt.Errorf("error saving key file %s: %v", keyPath, err)
 		}
-		logToFile(fmt.Sprintf("Saved key file: %s", keyPath))
 	}
 
 	return nil
@@ -290,18 +256,6 @@ func getIntValue(m map[string]interface{}, key string) int {
 		}
 	}
 	return 0
-}
-
-func logToFile(message string) {
-	logFile, err := os.OpenFile("backup_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Printf("Cannot open log file: %v\n", err)
-		return
-	}
-	defer logFile.Close()
-
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Fprintf(logFile, "[%s] %s\n", timestamp, message)
 }
 
 // RestoreFromBackup przywraca pliki z kopii zapasowych

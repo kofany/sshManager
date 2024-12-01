@@ -354,7 +354,6 @@ func (v *transferView) renderPanel(p *Panel) string {
 
 func (v *transferView) View() string {
 	var content strings.Builder
-
 	// Tytuł i status połączenia
 	titleContent := ui.TitleStyle.Render("File Transfer")
 	if v.connected {
@@ -405,18 +404,18 @@ func (v *transferView) View() string {
 	// Renderuj panele
 	leftPanel := v.renderPanel(&v.localPanel)
 	rightPanel := ""
-
 	if !v.connected {
 		rightPanel = ui.ErrorStyle.Render("\n  No SFTP Connection\n  Press 'q' to return and connect to a host first.")
 	} else {
 		rightPanel = v.renderPanel(&v.remotePanel)
 	}
+
 	// Wyrównaj panele
 	leftLines := strings.Split(leftPanel, "\n")
 	rightLines := strings.Split(rightPanel, "\n")
 	maxLines := max(len(leftLines), len(rightLines))
 
-	// Wyrównaj liczbe linii w panelach
+	// Wyrównaj liczbę linii w panelach
 	for i := len(leftLines); i < maxLines; i++ {
 		leftLines = append(leftLines, strings.Repeat(" ", panelWidth))
 	}
@@ -447,28 +446,28 @@ func (v *transferView) View() string {
 	content.WriteString("\n")
 	content.WriteString(footer)
 
-	// Renderuj całość w oknie i wycentruj
+	// Renderuj całość w oknie
 	finalContent := ui.WindowStyle.Render(content.String())
 
-	// Jeśli jest aktywny popup, renderuj go na wierzchu
-	// Jeśli jest aktywny popup, renderuj go na wierzchu
+	// Jeśli jest aktywny popup, renderuj go na wierzchu (wycentrowany)
 	if v.popup != nil {
 		return lipgloss.Place(
 			v.width,
 			v.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			finalContent+"\n"+v.popup.Render(), // używamy popup.Render() zamiast renderPopup()
+			finalContent+"\n"+v.popup.Render(),
 			lipgloss.WithWhitespaceChars(""),
 			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 		)
 	}
 
+	// Główny widok wyrównany do lewego górnego rogu
 	return lipgloss.Place(
 		v.width,
 		v.height,
-		lipgloss.Center,
-		lipgloss.Center,
+		lipgloss.Left, // Zmiana z Center na Left
+		lipgloss.Top,  // Zmiana z Center na Top
 		finalContent,
 		lipgloss.WithWhitespaceChars(""),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),

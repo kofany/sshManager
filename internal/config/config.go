@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultConfigFileName = "ssh_hosts.json"
-	DefaultConfigDir      = ".config/sshmen"
+	DefaultConfigDir      = ".config/sshm"
 	DefaultFilePerms      = 0600
 	DefaultKeysDir        = "keys" // Nowa stała
 )

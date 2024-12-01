@@ -1,0 +1,53 @@
+[2024-12-01 20:35:51] === Starting backup operation ===
+[2024-12-01 20:35:51] Keys directory: /Users/kfn/.config/sshm/keys
+[2024-12-01 20:35:51] Found 16 entries in keys directory
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Master Key.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test Key.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test1.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test2.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test3.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test4.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test5.key.old
+[2024-12-01 20:35:51] Removing old backup: /Users/kfn/.config/sshm/keys/Test6.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Master Key.key -> /Users/kfn/.config/sshm/keys/Master Key.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Master Key.key
+[2024-12-01 20:35:51] Skipping entry: Master Key.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test Key.key -> /Users/kfn/.config/sshm/keys/Test Key.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test Key.key
+[2024-12-01 20:35:51] Skipping entry: Test Key.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test1.key -> /Users/kfn/.config/sshm/keys/Test1.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test1.key
+[2024-12-01 20:35:51] Skipping entry: Test1.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test2.key -> /Users/kfn/.config/sshm/keys/Test2.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test2.key
+[2024-12-01 20:35:51] Skipping entry: Test2.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test3.key -> /Users/kfn/.config/sshm/keys/Test3.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test3.key
+[2024-12-01 20:35:51] Skipping entry: Test3.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test4.key -> /Users/kfn/.config/sshm/keys/Test4.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test4.key
+[2024-12-01 20:35:51] Skipping entry: Test4.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test5.key -> /Users/kfn/.config/sshm/keys/Test5.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test5.key
+[2024-12-01 20:35:51] Skipping entry: Test5.key.old
+[2024-12-01 20:35:51] Creating backup: /Users/kfn/.config/sshm/keys/Test6.key -> /Users/kfn/.config/sshm/keys/Test6.key.old
+[2024-12-01 20:35:51] Successfully created backup for: Test6.key
+[2024-12-01 20:35:51] Skipping entry: Test6.key.old
+[2024-12-01 20:35:51] === Backup operation completed ===
+
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Master Key.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test Key.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test1.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test2.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test3.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test4.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test5.key
+[2024-12-01 20:35:52] Removed key file: /Users/kfn/.config/sshm/keys/Test6.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Master Key.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test Key.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test1.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test2.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test3.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test4.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test5.key
+[2024-12-01 20:35:52] Saved key file: /Users/kfn/.config/sshm/keys/Test6.key

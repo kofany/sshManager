@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Ścieżka do katalogu głównego projektu
-PROJECT_DIR=$(pwd)
-
+RUN_DIR=$(pwd)
+PROJECT_DIR="$RUN_DIR/internal/ui/views"
 # Plik, do którego będą zapisywane wszystkie zawartości
 OUTPUT_FILE="$PROJECT_DIR/all.txt"
 
