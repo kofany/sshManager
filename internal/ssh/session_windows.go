@@ -1,7 +1,6 @@
-//go:build !windows
-// +build !windows
+//go:build windows
+// +build windows
 
-// internal/ssh/session.go
 package ssh
 
 import (
@@ -134,18 +133,15 @@ func (s *SSHSession) StartShell() error {
 	return nil
 }
 
-// handleSignals obsługuje sygnały systemowe
+// handleSignals obsługuje sygnały systemowe - wersja dla Windows
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
 	for {
 		select {
 		case sig := <-sigChan:
-			switch sig {
-			case syscall.SIGWINCH:
-				s.updateTerminalSize()
-			case syscall.SIGTERM, syscall.SIGINT:
+			if sig == syscall.SIGTERM || sig == syscall.SIGINT {
 				s.Close()
 				return
 			}
@@ -155,11 +151,11 @@ func (s *SSHSession) handleSignals() {
 	}
 }
 
-// updateTerminalSize aktualizuje rozmiar terminala
+// updateTerminalSize aktualizuje rozmiar terminala - wersja dla Windows
 func (s *SSHSession) updateTerminalSize() error {
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
-		return fmt.Errorf("failed to get terminal size: %v", err)
+		return nil // Ignorujemy błąd na Windows
 	}
 
 	s.stateMutex.Lock()
@@ -168,7 +164,7 @@ func (s *SSHSession) updateTerminalSize() error {
 	s.stateMutex.Unlock()
 
 	if err := s.session.WindowChange(height, width); err != nil {
-		return fmt.Errorf("failed to update window size: %v", err)
+		return nil // Ignorujemy błąd na Windows
 	}
 
 	return nil
