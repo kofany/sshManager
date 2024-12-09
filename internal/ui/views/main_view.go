@@ -563,8 +563,8 @@ func (v *mainView) View() string {
 	baseView := lipgloss.Place(
 		v.width,
 		v.height,
-		lipgloss.Center,
-		lipgloss.Center,
+		lipgloss.Left,
+		lipgloss.Top,
 		framedContent,
 		lipgloss.WithWhitespaceChars(""),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
@@ -585,6 +585,7 @@ func (v *mainView) View() string {
 
 	return baseView
 }
+
 func (v *mainView) renderHostPanel() string {
 	style := ui.PanelStyle.Width(45)
 	title := "Available Hosts"
@@ -744,7 +745,7 @@ func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	}
 
 	// Wypchnij przywrócone pliki do API (używając obecnego szyfru)
-	if err := sync.PushToAPI(apiKey, configPath, keysDir); err != nil {
+	if err := sync.PushToAPI(apiKey, configPath, keysDir, v.model.GetCipher()); err != nil {
 		v.popup = components.NewPopup(
 			components.PopupMessage,
 			"Error",

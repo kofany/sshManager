@@ -1,97 +1,113 @@
-// internal/crypto/crypto.go
-
 package crypto
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"errors"
-
-	"golang.org/x/crypto/nacl/secretbox"
+	"encoding/hex"
+	"fmt"
+	"io"
 )
 
 const (
-	keySize   = 32
-	nonceSize = 24
+	KEY_SIZE = 32 // 32 bytes for AES-256
 )
 
 type Cipher struct {
-	key [keySize]byte
+	key []byte
 }
 
-// NewCipher tworzy nowy obiekt szyfru z podanego hasła
+// Data struktura do przechowywania zaszyfrowanych danych
+type Data struct {
+	CipherText string
+	Nonce      string
+}
+
+// NewCipher tworzy nowy obiekt szyfru z podanym hasłem
 func NewCipher(password string) *Cipher {
-	// Generujemy klucz z hasła używając SHA-256
-	h := sha256.New()
-	h.Write([]byte(password))
-	var key [keySize]byte
-	copy(key[:], h.Sum(nil))
-
-	return &Cipher{key: key}
+	// Sprawdzamy czy hasło ma odpowiednią długość
+	if len(password) < KEY_SIZE {
+		// Rozszerzamy hasło do 32 bajtów jeśli za krótkie
+		key := make([]byte, KEY_SIZE)
+		copy(key, []byte(password))
+		return &Cipher{key: key}
+	}
+	// Jeśli hasło ma 32 lub więcej bajtów, bierzemy pierwsze 32
+	return &Cipher{key: []byte(password)[:KEY_SIZE]}
 }
 
-// Encrypt szyfruje dane
-func (c *Cipher) Encrypt(data string) (string, error) {
+// Encrypt szyfruje tekst używając AES-256-GCM
+func (c *Cipher) Encrypt(plaintext string) (string, error) {
+	// Tworzymy block cipher
+	block, err := aes.NewCipher(c.key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %v", err)
+	}
+
+	// Tworzymy GCM
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %v", err)
+	}
+
 	// Generujemy nonce
-	var nonce [nonceSize]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", err
+	nonce := make([]byte, aesGCM.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %v", err)
 	}
 
 	// Szyfrujemy
-	encrypted := secretbox.Seal(nonce[:], []byte(data), &nonce, &c.key)
+	ciphertext := aesGCM.Seal(nil, nonce, []byte(plaintext), nil)
 
-	// Kodujemy do base64
-	return base64.StdEncoding.EncodeToString(encrypted), nil
+	// Łączymy nonce + ciphertext i konwertujemy do hex
+	combined := make([]byte, len(nonce)+len(ciphertext))
+	copy(combined, nonce)
+	copy(combined[len(nonce):], ciphertext)
+
+	return hex.EncodeToString(combined), nil
 }
 
-// Decrypt deszyfruje dane
-func (c *Cipher) Decrypt(encryptedStr string) (string, error) {
-	// Dekodujemy z base64
-	encrypted, err := base64.StdEncoding.DecodeString(encryptedStr)
+// Decrypt deszyfruje tekst używając AES-256-GCM
+func (c *Cipher) Decrypt(encryptedHex string) (string, error) {
+	// Dekodujemy z hex
+	combined, err := hex.DecodeString(encryptedHex)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode hex: %v", err)
 	}
 
-	// Sprawdzamy czy dane są wystarczająco długie
-	if len(encrypted) < nonceSize {
-		return "", errors.New("encrypted data too short")
+	// Tworzymy block cipher
+	block, err := aes.NewCipher(c.key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
 
-	// Wyodrębniamy nonce
-	var nonce [nonceSize]byte
-	copy(nonce[:], encrypted[:nonceSize])
+	// Tworzymy GCM
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %v", err)
+	}
+
+	// Sprawdzamy minimalną długość
+	nonceSize := aesGCM.NonceSize()
+	if len(combined) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	// Wyodrębniamy nonce i ciphertext
+	nonce := combined[:nonceSize]
+	ciphertext := combined[nonceSize:]
 
 	// Deszyfrujemy
-	decrypted, ok := secretbox.Open(nil, encrypted[nonceSize:], &nonce, &c.key)
-	if !ok {
-		return "", errors.New("decryption failed")
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt: %v", err)
 	}
 
-	return string(decrypted), nil
+	return string(plaintext), nil
 }
 
-// ValidateKey sprawdza czy klucz jest poprawny próbując odszyfrować przykładowe dane
-func ValidateKey(cipher *Cipher, testData string) bool {
-	encrypted, err := cipher.Encrypt("test")
-	if err != nil {
-		return false
-	}
-
-	decrypted, err := cipher.Decrypt(encrypted)
-	if err != nil {
-		return false
-	}
-
-	return decrypted == "test"
-}
-
+// Helper function dla zachowania kompatybilności wstecznej
 func GenerateKeyFromPassword(password string) []byte {
-	// Dopełnij hasło do 32 bajtów
-	paddedPass := make([]byte, 32)
-	copy(paddedPass, []byte(password))
-
-	// Zakoduj using base64
-	return []byte(base64.URLEncoding.EncodeToString(paddedPass)[:32])
+	cipher := NewCipher(password)
+	return cipher.key
 }

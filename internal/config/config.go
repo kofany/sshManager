@@ -85,8 +85,6 @@ func (m *Manager) Load() error {
 	return nil
 }
 
-// Save zapisuje konfigurację do pliku
-// Save zapisuje konfigurację do pliku i synchronizuje z API
 func (m *Manager) Save() error {
 	// Najpierw zapisujemy lokalnie
 	data, err := json.MarshalIndent(m.config, "", "    ")
@@ -102,8 +100,8 @@ func (m *Manager) Save() error {
 	if apiKey, err := m.LoadApiKey(m.cipher); err == nil {
 		keysDir := filepath.Join(filepath.Dir(m.configPath), DefaultKeysDir)
 
-		// Wypychamy dane do API
-		if err := sync.PushToAPI(apiKey, m.configPath, keysDir); err != nil {
+		// Wypychamy dane do API z przekazaniem cipher do szyfrowania
+		if err := sync.PushToAPI(apiKey, m.configPath, keysDir, m.cipher); err != nil {
 			return fmt.Errorf("failed to sync with API: %v", err)
 		}
 	}

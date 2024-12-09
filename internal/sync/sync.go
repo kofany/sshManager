@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ApiBaseURL = "https://sshm.io/api/v1"
+	ApiBaseURL = "https://sshm.io/api/v1/"
 )
 
 type SyncResponse struct {
@@ -139,40 +139,66 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 
 	// Konwersja hostów z API do lokalnej struktury
 	for _, h := range data.Hosts {
-		if hostMap, ok := h.(map[string]interface{}); ok {
-			host := models.Host{
-				Name:        getStringValue(hostMap, "name"),
-				Description: getStringValue(hostMap, "description"),
-				Login:       getStringValue(hostMap, "login"),
-				IP:          getStringValue(hostMap, "ip"),
-				Port:        getStringValue(hostMap, "port"),
-				PasswordID:  getIntValue(hostMap, "password_id"),
-			}
-			config.Hosts = append(config.Hosts, host)
+		hostMap, ok := h.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid host data format")
 		}
+
+		// Odszyfrowanie danych
+		login, err := cipher.Decrypt(getStringValue(hostMap, "login"))
+		if err != nil {
+			return fmt.Errorf("failed to decrypt login: %v", err)
+		}
+
+		ip, err := cipher.Decrypt(getStringValue(hostMap, "ip"))
+		if err != nil {
+			return fmt.Errorf("failed to decrypt ip: %v", err)
+		}
+
+		port, err := cipher.Decrypt(getStringValue(hostMap, "port"))
+		if err != nil {
+			return fmt.Errorf("failed to decrypt port: %v", err)
+		}
+
+		// Tworzenie obiektu hosta tylko z polami, które są synchronizowane z API
+		host := models.Host{
+			Name:        getStringValue(hostMap, "name"),
+			Description: getStringValue(hostMap, "description"),
+			Login:       login,
+			IP:          ip,
+			Port:        port,
+			PasswordID:  getIntValue(hostMap, "password_id"),
+		}
+		config.Hosts = append(config.Hosts, host)
 	}
 
 	// Konwersja haseł z API do lokalnej struktury
 	for _, p := range data.Passwords {
-		if passMap, ok := p.(map[string]interface{}); ok {
-			pass := models.Password{
-				Description: getStringValue(passMap, "description"),
-				Password:    getStringValue(passMap, "password"),
-			}
-			config.Passwords = append(config.Passwords, pass)
+		passMap, ok := p.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid password data format")
 		}
+
+		pass := models.Password{
+			Description: getStringValue(passMap, "description"),
+			Password:    getStringValue(passMap, "password"),
+		}
+		config.Passwords = append(config.Passwords, pass)
 	}
 
 	// Konwersja kluczy z API do lokalnej struktury
 	for _, k := range data.Keys {
-		if keyMap, ok := k.(map[string]interface{}); ok {
-			key := models.Key{
-				Description: getStringValue(keyMap, "description"),
-				Path:        getStringValue(keyMap, "path"),
-				KeyData:     getStringValue(keyMap, "key_data"),
-			}
-			config.Keys = append(config.Keys, key)
+		keyMap, ok := k.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid key data format")
 		}
+
+		key := models.Key{
+			Description: getStringValue(keyMap, "description"),
+			Path:        getStringValue(keyMap, "path"),
+			KeyData:     getStringValue(keyMap, "key_data"),
+		}
+		config.Keys = append(config.Keys, key)
 	}
 
 	// Zapisz skonwertowane dane do pliku konfiguracyjnego
@@ -232,32 +258,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 	return nil
 }
 
-// Pomocnicze funkcje do konwersji danych
-func getStringValue(m map[string]interface{}, key string) string {
-	if val, ok := m[key]; ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
-}
-
-func getIntValue(m map[string]interface{}, key string) int {
-	if val, ok := m[key]; ok {
-		switch v := val.(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		case string:
-			if i, err := strconv.Atoi(v); err == nil {
-				return i
-			}
-		}
-	}
-	return 0
-}
-
 // RestoreFromBackup przywraca pliki z kopii zapasowych
 func RestoreFromBackup(configPath, keysDir string) error {
 	// Przywróć plik konfiguracyjny
@@ -287,44 +287,132 @@ func RestoreFromBackup(configPath, keysDir string) error {
 	return nil
 }
 
-// PushToAPI wysyła dane do API
-func PushToAPI(apiKey string, configPath, keysDir string) error {
-	// Wczytaj dane z lokalnej konfiguracji
+// Uproszczona funkcja do pobierania wartości string z mapy
+func getStringValue(m map[string]interface{}, key string) string {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case string:
+			return v
+		case *string:
+			if v != nil {
+				return *v
+			}
+		case nil:
+			return ""
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	}
+	return ""
+}
+
+// Uproszczona funkcja do pobierania wartości int z mapy
+func getIntValue(m map[string]interface{}, key string) int {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		case string:
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		case nil:
+			return 0
+		}
+	}
+	return 0
+}
+
+func PushToAPI(apiKey string, configPath, keysDir string, cipher *crypto.Cipher) error {
+	// Odczytaj plik konfiguracyjny
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("error reading config file: %v", err)
 	}
 
+	// Struktura do przechowywania danych lokalnych
 	var localData struct {
-		Hosts     []interface{} `json:"hosts"`
-		Passwords []interface{} `json:"passwords"`
-		Keys      []interface{} `json:"keys"`
+		Hosts     []models.Host     `json:"hosts"`
+		Passwords []models.Password `json:"passwords"`
+		Keys      []models.Key      `json:"keys"`
 	}
 
+	// Parsowanie danych konfiguracyjnych
 	if err := json.Unmarshal(configData, &localData); err != nil {
 		return fmt.Errorf("error parsing config file: %v", err)
 	}
 
-	// Przygotuj dane do wysłania
+	// Struktura do wysłania do API
 	payload := struct {
 		Data struct {
-			Hosts     []interface{} `json:"hosts"`
-			Passwords []interface{} `json:"passwords"`
-			Keys      []interface{} `json:"keys"`
+			Hosts     []map[string]interface{} `json:"hosts"`
+			Passwords []map[string]interface{} `json:"passwords"`
+			Keys      []map[string]interface{} `json:"keys"`
 		} `json:"data"`
-	}{
-		Data: localData,
+	}{}
+
+	// Przygotowanie hostów do wysyłki
+	for _, host := range localData.Hosts {
+		// Szyfrowanie wrażliwych danych
+		encryptedLogin, err := cipher.Encrypt(host.Login)
+		if err != nil {
+			return fmt.Errorf("error encrypting login: %v", err)
+		}
+
+		encryptedIP, err := cipher.Encrypt(host.IP)
+		if err != nil {
+			return fmt.Errorf("error encrypting IP: %v", err)
+		}
+
+		encryptedPort, err := cipher.Encrypt(host.Port)
+		if err != nil {
+			return fmt.Errorf("error encrypting port: %v", err)
+		}
+
+		// Przygotowanie mapy tylko z polami do synchronizacji
+		hostData := map[string]interface{}{
+			"name":        host.Name,
+			"description": host.Description,
+			"login":       encryptedLogin,
+			"ip":          encryptedIP,
+			"port":        encryptedPort,
+			"password_id": host.PasswordID,
+		}
+		payload.Data.Hosts = append(payload.Data.Hosts, hostData)
 	}
 
-	// Konwertuj do JSON
+	// Przygotowanie haseł do wysyłki
+	for _, pass := range localData.Passwords {
+		passData := map[string]interface{}{
+			"description": pass.Description,
+			"password":    pass.Password,
+		}
+		payload.Data.Passwords = append(payload.Data.Passwords, passData)
+	}
+
+	// Przygotowanie kluczy do wysyłki
+	for _, key := range localData.Keys {
+		keyData := map[string]interface{}{
+			"description": key.Description,
+			"key_data":    key.KeyData,
+			"path":        key.Path,
+		}
+		payload.Data.Keys = append(payload.Data.Keys, keyData)
+	}
+
+	// Konwersja na JSON
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("error preparing data: %v", err)
+		return fmt.Errorf("error preparing data for API: %v", err)
 	}
 
-	// Wyślij do API
+	// Przygotowanie i wykonanie requestu HTTP
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", ApiBaseURL+"/sync", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", ApiBaseURL+"sync", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}
@@ -332,12 +420,14 @@ func PushToAPI(apiKey string, configPath, keysDir string) error {
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
+	// Wykonanie zapytania
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("error making request: %v", err)
 	}
 	defer resp.Body.Close()
 
+	// Sprawdzenie odpowiedzi
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, body)
