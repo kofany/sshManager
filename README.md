@@ -2,6 +2,10 @@
 
 SSH Manager is a terminal-based application for managing SSH connections, file transfers, and credentials with an intuitive user interface and cloud synchronization capabilities.
 
+Web panel with cloud api on Github: [sshm.io](https://github.com/kofany/sshm.io)
+
+Web panel hosted by me: [sshm.io](https://sshm.io)
+
 ---
 
 ## Features
