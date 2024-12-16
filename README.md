@@ -24,7 +24,7 @@ Web panel hosted by me: [sshm.io](https://sshm.io)
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/sshmanager.git
+git clone https://github.com/kofany/sshmanager.git
 
 # Build the application
 cd sshmanager
