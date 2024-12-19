@@ -1,6 +1,6 @@
-# SSH Manager
+# sshManager - client app for https://sshm.io
 
-SSH Manager is a terminal-based application for managing SSH connections, file transfers, and credentials with an intuitive user interface and cloud synchronization capabilities.
+sshManager is a terminal-based application for managing SSH connections, file transfers, and credentials with an intuitive user interface and cloud synchronization capabilities.
 
 Web panel with cloud api on Github: [sshm.io](https://github.com/kofany/sshm.io)
 
