@@ -1268,13 +1268,13 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		case "up", "k":
+		case "up", "w":
 			panel := v.getActivePanel()
 			v.navigatePanel(panel, -1)
 			v.errorMessage = ""
 			return v, nil
 
-		case "down", "j":
+		case "down", "s":
 			panel := v.getActivePanel()
 			v.navigatePanel(panel, 1)
 			v.errorMessage = ""
@@ -1295,7 +1295,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		case "s":
+		case "x":
 			if !v.transferring {
 				panel := v.getActivePanel()
 				if len(panel.entries) > 0 && panel.selectedIndex < len(panel.entries) {
@@ -1389,18 +1389,18 @@ var helpText = `
  F1           - Toggle help
  Ctrl+r       - Refresh
  q/ESC+0      - Exit
- s            - Select/Unselect file
+ x            - Select/Unselect file
 
  Navigation
  ----------
- Up/k         - Move up
- Down/j       - Move down
+ Up/w         - Move up
+ Down/s       - Move down
 `
 
 func (v *transferView) renderShortcuts() string {
 	// Nagłówki tabeli i skróty
 	headers := []string{"Switch Panel", "Select", "Copy", "Rename", "MkDir", "Delete", "Help", "Theme", "Exit"}
-	shortcuts := []string{"[Tab]", "[s]", "[F5|ESC+5|c]", "[F6|ESC+6|r]", "[F7|ESC+7|m]", "[F8|ESC+8|d]", "[F1]", "[space]", "[q|ESC+0]"}
+	shortcuts := []string{"[Tab]", "[x]", "[F5|ESC+5|c]", "[F6|ESC+6|r]", "[F7|ESC+7|m]", "[F8|ESC+8|d]", "[F1]", "[space]", "[q|ESC+0]"}
 
 	// Funkcja stylizująca kolumny
 	var TableStyle = func(row, col int) lipgloss.Style {

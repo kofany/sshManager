@@ -337,7 +337,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			v.popup = components.NewPopup(
 				components.PopupMessage,
-				"Błąd połączenia",
+				"Connection error",
 				fmt.Sprintf("SSH connection failed: %v", msg.err),
 				50,
 				7,
@@ -353,7 +353,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectError:
 		v.popup = components.NewPopup(
 			components.PopupMessage,
-			"Błąd połączenia",
+			"Connection error",
 			msg.Error(),
 			50,
 			7,
@@ -529,7 +529,7 @@ func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
 func (v *mainView) View() string {
 	// Przygotuj główną zawartość
 	var content strings.Builder
-	content.WriteString(ui.TitleStyle.Render("SSH Manager") + "\n\n")
+	content.WriteString(ui.TitleStyle.Render("sshManager ❯ https://sshm.io") + "\n\n")
 
 	// Główny layout w stylu MC z dwoma panelami
 	leftPanel := v.renderHostPanel()
