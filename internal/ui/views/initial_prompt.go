@@ -246,7 +246,6 @@ func (m *ApiKeyPromptModel) View() string {
 
 	errorStyle := ui.ErrorStyle
 
-	// ASCII Art - ten sam co w pierwotnym pliku
 	asciiArt := `
          _     __  __                                   
  ___ ___| |__ |  \/  | __ _ _ __   __ _  __ _  ___ _ __ 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,18 +29,19 @@ const (
 
 // SSHSession reprezentuje aktywną sesję SSH
 type SSHSession struct {
-	client     *ssh.Client
-	session    *ssh.Session
-	state      SessionState
-	lastError  error
-	stdin      *os.File
-	stdout     *os.File
-	stderr     *os.File
-	termWidth  int
-	termHeight int
-	keepAlive  time.Duration
-	stopChan   chan struct{}
-	stateMutex sync.RWMutex
+	client            *ssh.Client
+	session           *ssh.Session
+	state             SessionState
+	lastError         error
+	stdin             *os.File
+	stdout            *os.File
+	stderr            *os.File
+	termWidth         int
+	termHeight        int
+	keepAlive         time.Duration
+	stopChan          chan struct{}
+	stateMutex        sync.RWMutex
+	originalTermState *term.State
 }
 
 // NewSSHSession tworzy nową sesję SSH
@@ -102,6 +104,13 @@ func (s *SSHSession) StartShell() error {
 	s.session.Stdout = s.stdout
 	s.session.Stderr = s.stderr
 
+	// Zapisujemy oryginalny stan terminala
+	var err error
+	s.originalTermState, err = term.GetState(int(os.Stdin.Fd()))
+	if err != nil {
+		return fmt.Errorf("failed to get terminal state: %v", err)
+	}
+
 	// Uruchomienie obsługi sygnałów
 	go s.handleSignals()
 
@@ -111,11 +120,13 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Przejście w tryb raw dla terminala
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
+
+	// Upewniamy się, że terminal zostanie przywrócony
+	defer term.Restore(int(os.Stdin.Fd()), rawState)
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -136,18 +147,41 @@ func (s *SSHSession) StartShell() error {
 
 // handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
-	sigChan := make(chan os.Signal, 1)
+	sigChan := make(chan os.Signal, 5) // bufor na sygnały
 	signal.Notify(sigChan, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+
+	// Kanał dla prób ponowienia
+	retryTicker := time.NewTicker(time.Second)
+	defer retryTicker.Stop()
+
+	var resizeError error
+	var needsResize bool
 
 	for {
 		select {
 		case sig := <-sigChan:
 			switch sig {
 			case syscall.SIGWINCH:
-				s.updateTerminalSize()
+				needsResize = true
+				if err := s.updateTerminalSize(); err != nil {
+					resizeError = err
+				} else {
+					resizeError = nil
+					needsResize = false
+				}
 			case syscall.SIGTERM, syscall.SIGINT:
 				s.Close()
 				return
+			}
+		case <-retryTicker.C:
+			if needsResize && resizeError != nil {
+				if err := s.updateTerminalSize(); err != nil {
+					resizeError = err
+				} else {
+					resizeError = nil
+					needsResize = false
+				}
 			}
 		case <-s.stopChan:
 			return
@@ -155,7 +189,6 @@ func (s *SSHSession) handleSignals() {
 	}
 }
 
-// updateTerminalSize aktualizuje rozmiar terminala
 func (s *SSHSession) updateTerminalSize() error {
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
@@ -163,13 +196,19 @@ func (s *SSHSession) updateTerminalSize() error {
 	}
 
 	s.stateMutex.Lock()
-	s.termWidth = width
-	s.termHeight = height
-	s.stateMutex.Unlock()
+	defer s.stateMutex.Unlock()
+
+	// Sprawdź czy rozmiar rzeczywiście się zmienił
+	if width == s.termWidth && height == s.termHeight {
+		return nil
+	}
 
 	if err := s.session.WindowChange(height, width); err != nil {
 		return fmt.Errorf("failed to update window size: %v", err)
 	}
+
+	s.termWidth = width
+	s.termHeight = height
 
 	return nil
 }
@@ -196,16 +235,31 @@ func (s *SSHSession) keepAliveLoop() {
 
 // Close zamyka sesję
 func (s *SSHSession) Close() error {
-	close(s.stopChan)
+	if s.stopChan != nil {
+		close(s.stopChan)
+	}
+
+	var errors []string
 
 	if s.session != nil {
-		s.session.Close()
+		if err := s.session.Close(); err != nil {
+			errors = append(errors, fmt.Sprintf("session close error: %v", err))
+		}
+		s.session = nil
 	}
+
 	if s.client != nil {
-		s.client.Close()
+		if err := s.client.Close(); err != nil {
+			errors = append(errors, fmt.Sprintf("client close error: %v", err))
+		}
+		s.client = nil
 	}
 
 	s.setState(StateDisconnected)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("close errors: %s", strings.Join(errors, "; "))
+	}
 	return nil
 }
 

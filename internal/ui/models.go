@@ -678,3 +678,11 @@ func (m *Model) IsLocalMode() bool {
 func (m *Model) GetConfig() *config.Manager {
 	return m.config
 }
+
+func (m *Model) SetSSHClient(client *ssh.SSHClient) {
+	m.sshClient = client
+}
+
+func (m *Model) GetSSHClient() *ssh.SSHClient {
+	return m.sshClient
+}

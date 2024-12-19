@@ -137,7 +137,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		Keys:      make([]models.Key, 0),
 	}
 
-	// Konwersja hostów z API do lokalnej struktury
 	for _, h := range data.Hosts {
 		hostMap, ok := h.(map[string]interface{})
 		if !ok {
@@ -145,6 +144,16 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		}
 
 		// Odszyfrowanie danych
+		name, err := cipher.Decrypt(getStringValue(hostMap, "name"))
+		if err != nil {
+			return fmt.Errorf("failed to decrypt name: %v", err)
+		}
+
+		description, err := cipher.Decrypt(getStringValue(hostMap, "description"))
+		if err != nil {
+			return fmt.Errorf("failed to decrypt description: %v", err)
+		}
+
 		login, err := cipher.Decrypt(getStringValue(hostMap, "login"))
 		if err != nil {
 			return fmt.Errorf("failed to decrypt login: %v", err)
@@ -160,10 +169,10 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 			return fmt.Errorf("failed to decrypt port: %v", err)
 		}
 
-		// Tworzenie obiektu hosta tylko z polami, które są synchronizowane z API
+		// Tworzenie obiektu hosta z odszyfrowanymi danymi
 		host := models.Host{
-			Name:        getStringValue(hostMap, "name"),
-			Description: getStringValue(hostMap, "description"),
+			Name:        name,
+			Description: description,
 			Login:       login,
 			IP:          ip,
 			Port:        port,
@@ -172,7 +181,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		config.Hosts = append(config.Hosts, host)
 	}
 
-	// Konwersja haseł z API do lokalnej struktury
 	for _, p := range data.Passwords {
 		passMap, ok := p.(map[string]interface{})
 		if !ok {
@@ -201,7 +209,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		config.Keys = append(config.Keys, key)
 	}
 
-	// Zapisz skonwertowane dane do pliku konfiguracyjnego
 	jsonData, err := json.MarshalIndent(config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("error marshaling config data: %v", err)
@@ -211,7 +218,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		return fmt.Errorf("error saving config file: %v", err)
 	}
 
-	// Usuń stare pliki kluczy, ale zachowaj backupy
 	entries, err := os.ReadDir(keysDir)
 	if err != nil {
 		return fmt.Errorf("error reading keys directory: %v", err)
@@ -228,18 +234,15 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		}
 	}
 
-	// Odtwórz katalog kluczy i zapisz nowe klucze
 	if err := os.MkdirAll(keysDir, 0700); err != nil {
 		return fmt.Errorf("error creating keys directory: %v", err)
 	}
 
-	// Zapisz nowe klucze
 	for _, key := range config.Keys {
 		if key.KeyData == "" || key.Description == "" {
 			continue
 		}
 
-		// Odszyfruj zawartość klucza przed zapisem
 		keyContent := key.KeyData
 		if cipher != nil {
 			decrypted, err := cipher.Decrypt(keyContent)
@@ -258,7 +261,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 	return nil
 }
 
-// RestoreFromBackup przywraca pliki z kopii zapasowych
 func RestoreFromBackup(configPath, keysDir string) error {
 	// Przywróć plik konfiguracyjny
 	backupConfigPath := configPath + ".old"
@@ -358,6 +360,16 @@ func PushToAPI(apiKey string, configPath, keysDir string, cipher *crypto.Cipher)
 	// Przygotowanie hostów do wysyłki
 	for _, host := range localData.Hosts {
 		// Szyfrowanie wrażliwych danych
+		encryptedName, err := cipher.Encrypt(host.Name)
+		if err != nil {
+			return fmt.Errorf("error encrypting name: %v", err)
+		}
+
+		encryptedDescription, err := cipher.Encrypt(host.Description)
+		if err != nil {
+			return fmt.Errorf("error encrypting description: %v", err)
+		}
+
 		encryptedLogin, err := cipher.Encrypt(host.Login)
 		if err != nil {
 			return fmt.Errorf("error encrypting login: %v", err)
@@ -373,14 +385,17 @@ func PushToAPI(apiKey string, configPath, keysDir string, cipher *crypto.Cipher)
 			return fmt.Errorf("error encrypting port: %v", err)
 		}
 
-		// Przygotowanie mapy tylko z polami do synchronizacji
+		// Przygotowanie mapy z zaszyfrowanymi danymi
 		hostData := map[string]interface{}{
-			"name":        host.Name,
-			"description": host.Description,
-			"login":       encryptedLogin,
-			"ip":          encryptedIP,
-			"port":        encryptedPort,
-			"password_id": host.PasswordID,
+			"name":          encryptedName,
+			"description":   encryptedDescription,
+			"login":         encryptedLogin,
+			"ip":            encryptedIP,
+			"port":          encryptedPort,
+			"password_id":   host.PasswordID,
+			"terminal_type": host.TerminalType,
+			"keep_alive":    host.KeepAlive,
+			"compression":   host.Compression,
 		}
 		payload.Data.Hosts = append(payload.Data.Hosts, hostData)
 	}

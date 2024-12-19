@@ -46,6 +46,14 @@ type mainView struct {
 type connectError string
 type errMsg string
 
+type hostKeyVerificationMsg struct {
+	IP          string
+	Port        string
+	Fingerprint string
+}
+
+type connectSuccessMsg struct{}
+
 type connectFinishedMsg struct {
 	err error
 }
@@ -81,8 +89,33 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.model.UpdateWindowSize(msg.Width, msg.Height)
 		return v, nil
 
+	case hostKeyVerificationMsg:
+		v.popup = components.NewPopup(
+			components.PopupHostKey,
+			"Host Key Verification",
+			fmt.Sprintf("New host key for %s:%s\n\nKey fingerprint:\n%s\n",
+				msg.IP, msg.Port, msg.Fingerprint),
+			70,
+			12,
+			v.width,
+			v.height,
+		)
+		return v, nil
+
+	case connectSuccessMsg:
+		v.connecting = true
+		v.popup = components.NewPopup(
+			components.PopupMessage,
+			"SSH",
+			"Connecting...",
+			50,
+			7,
+			v.width,
+			v.height,
+		)
+		return v, tea.Quit
+
 	case errMsg:
-		v.errMsg = string(msg)
 		v.popup = components.NewPopup(
 			components.PopupMessage,
 			"Error",
@@ -107,15 +140,24 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.popup = nil
 					return v, nil
 				}
+				// w main_view.go
+
 			case "y", "Y":
 				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
 					v.waitingForKeyConfirmation = false
-					cmd, err := ssh.CreateSSHCommand(v.pendingConnection.host, v.pendingConnection.password, true)
+
+					// Tworzymy instancję SSHClient
+					sshClient := ssh.NewSSHClient(v.model.GetPasswords())
+					err := sshClient.ConnectWithAcceptedKey(
+						v.pendingConnection.host,
+						v.pendingConnection.password,
+					)
+
 					if err != nil {
 						v.popup = components.NewPopup(
 							components.PopupMessage,
 							"Błąd połączenia",
-							fmt.Sprintf("Failed to create SSH command: %v", err),
+							fmt.Sprintf("Failed to connect: %v", err),
 							50,
 							7,
 							v.width,
@@ -123,6 +165,9 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						)
 						return v, nil
 					}
+
+					// Zapisujemy klienta SSH w modelu
+					v.model.SetSSHClient(sshClient)
 					v.connecting = true
 					v.popup = components.NewPopup(
 						components.PopupMessage,
@@ -133,12 +178,9 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						v.width,
 						v.height,
 					)
-					return v, tea.ExecProcess(
-						cmd,
-						func(err error) tea.Msg {
-							return connectFinishedMsg{err: err}
-						},
-					)
+
+					// Teraz kończymy pętlę TUI, aby main.go mogło wykonać ConfigureTerminal() i StartShell()
+					return v, tea.Quit
 				}
 			case "n", "N":
 				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
@@ -161,8 +203,11 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Standardowa obsługa klawiszy nawigacji
 		switch msg.String() {
 		case "q", "ctrl+c":
-			v.model.SetQuitting(true)
-			return v, tea.Quit
+			if !v.connecting {
+				v.model.SetQuitting(true)
+				return v, tea.Quit
+			}
+			return v, nil
 
 		case "up", "w":
 			if len(v.hosts) > 0 && !v.connecting {
@@ -301,6 +346,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		} else {
 			v.popup = nil
+
 		}
 		return v, nil
 
@@ -325,136 +371,83 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 	host := v.hosts[v.selectedIndex]
 	v.model.SetSelectedHost(&host)
 
-	var authData string
-	var err error
+	// Zwracamy komendę, która będzie wykonana asynchronicznie
+	return v, func() tea.Msg {
+		var authData string
 
-	if host.PasswordID < 0 {
-		// Obsługa klucza SSH
-		keyIndex := -(host.PasswordID + 1) // Konwertujemy ujemny indeks na właściwy indeks klucza
-		keys := v.model.GetKeys()
-		if keyIndex >= len(keys) {
-			v.popup = components.NewPopup(
-				components.PopupMessage,
-				"Connection Error",
-				"Invalid key ID",
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-			return v, nil
-		}
-
-		key := keys[keyIndex]
-		keyPath, err := key.GetKeyPath()
-		if err != nil {
-			v.popup = components.NewPopup(
-				components.PopupMessage,
-				"Connection Error",
-				fmt.Sprintf("Failed to get key path: %v", err),
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-			return v, nil
-		}
-		authData = keyPath
-	} else {
-		// Obsługa hasła
-		passwords := v.model.GetPasswords()
-		if host.PasswordID >= len(passwords) {
-			v.popup = components.NewPopup(
-				components.PopupMessage,
-				"Connection Error",
-				"Invalid password ID",
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-			return v, nil
-		}
-
-		password := passwords[host.PasswordID]
-		decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-		if err != nil {
-			v.popup = components.NewPopup(
-				components.PopupMessage,
-				"Connection Error",
-				fmt.Sprintf("Failed to decrypt password: %v", err),
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-			return v, nil
-		}
-		authData = decryptedPass
-	}
-
-	cmd, err := ssh.CreateSSHCommand(&host, authData, false)
-	if err != nil {
-		if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
-			fingerprint, err := ssh.GetHostKeyFingerprint(&host)
-			if err != nil {
-				v.popup = components.NewPopup(
-					components.PopupMessage,
-					"Key Verification Error",
-					fmt.Sprintf("Cannot retrieve key fingerprint: %v", err),
-					50,
-					7,
-					v.width,
-					v.height,
-				)
-				return v, nil
+		// Przygotowanie danych autoryzacji
+		if host.PasswordID < 0 {
+			// Obsługa klucza SSH
+			keyIndex := -(host.PasswordID + 1)
+			keys := v.model.GetKeys()
+			if keyIndex >= len(keys) {
+				return errMsg("Invalid key ID")
 			}
 
-			v.waitingForKeyConfirmation = true
-			v.hostKeyFingerprint = fingerprint
-			v.pendingConnection.host = &host
-			v.pendingConnection.password = authData
-			v.popup = components.NewPopup(
-				components.PopupHostKey,
-				"Host Key Verification",
-				fmt.Sprintf("New host key for %s:%s\n\nKey fingerprint:\n%s\n",
-					verificationRequired.IP, verificationRequired.Port, fingerprint),
-				70,
-				12,
-				v.width,
-				v.height,
-			)
-			return v, nil
+			key := keys[keyIndex]
+			keyPath, err := key.GetKeyPath()
+			if err != nil {
+				return errMsg(fmt.Sprintf("Failed to get key path: %v", err))
+			}
+			authData = keyPath
+		} else {
+			// Obsługa hasła
+			passwords := v.model.GetPasswords()
+			if host.PasswordID >= len(passwords) {
+				return errMsg("Invalid password ID")
+			}
+
+			password := passwords[host.PasswordID]
+			decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+			if err != nil {
+				return errMsg(fmt.Sprintf("Failed to decrypt password: %v", err))
+			}
+			authData = decryptedPass
 		}
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Connection Error",
-			fmt.Sprintf("Failed to create SSH command: %v", err),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
+
+		// Utworzenie klienta SSH
+		sshClient := ssh.NewSSHClient(v.model.GetPasswords())
+
+		// Kanał do obsługi timeoutu połączenia
+		connectionDone := make(chan error, 1)
+		go func() {
+			connectionDone <- sshClient.Connect(&host, authData)
+		}()
+
+		// Czekamy na połączenie z timeoutem
+		select {
+		case err := <-connectionDone:
+			if err != nil {
+				// Sprawdzamy czy to błąd weryfikacji klucza
+				if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
+					fingerprint, err := ssh.GetHostKeyFingerprint(&host)
+					if err != nil {
+						return errMsg(fmt.Sprintf("Cannot retrieve key fingerprint: %v", err))
+					}
+
+					// Ustawiamy stan oczekiwania na potwierdzenie klucza
+					v.waitingForKeyConfirmation = true
+					v.hostKeyFingerprint = fingerprint
+					v.pendingConnection.host = &host
+					v.pendingConnection.password = authData
+
+					return hostKeyVerificationMsg{
+						IP:          verificationRequired.IP,
+						Port:        verificationRequired.Port,
+						Fingerprint: fingerprint,
+					}
+				}
+				return errMsg(fmt.Sprintf("Failed to connect: %v", err))
+			}
+
+			// Połączenie udane
+			v.model.SetSSHClient(sshClient)
+			return connectSuccessMsg{}
+
+		case <-time.After(10 * time.Second):
+			return errMsg("Connection timed out")
+		}
 	}
-
-	v.connecting = true
-	v.popup = components.NewPopup(
-		components.PopupMessage,
-		"SSH",
-		"Connecting...",
-		50,
-		7,
-		v.width,
-		v.height,
-	)
-
-	return v, tea.ExecProcess(
-		cmd,
-		func(err error) tea.Msg {
-			return connectFinishedMsg{err: err}
-		},
-	)
 }
 
 func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {

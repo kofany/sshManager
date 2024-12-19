@@ -2,7 +2,7 @@
 
 # Ścieżka do katalogu głównego projektu
 RUN_DIR=$(pwd)
-PROJECT_DIR="$RUN_DIR/internal/ui/views"
+PROJECT_DIR="$RUN_DIR/internal/ui/"
 # Plik, do którego będą zapisywane wszystkie zawartości
 OUTPUT_FILE="$PROJECT_DIR/all.txt"
 

@@ -10,6 +10,7 @@ import (
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -80,9 +81,14 @@ func (m *programModel) updateCurrentView() {
 		m.uiModel.SetActiveView(ui.ViewMain)
 	}
 }
+
 func (m *programModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Sprawdź czy użytkownik chce zakończyć program
-	if m.uiModel.IsQuitting() || m.quitting {
+	if m.uiModel.IsQuitting() {
+		m.quitting = true
+		return m, tea.Quit
+	}
+	if m.quitting {
 		return m, tea.Quit
 	}
 
@@ -172,7 +178,7 @@ func (m *programModel) handleApiKeyAndSync(apiKey string, isLocalMode bool) tea.
 		fmt.Printf("Warning: Could not sync with API: %v\n", err)
 		m.uiModel.SetLocalMode(true)
 	} else {
-		// Zapisz dane z API - dodajemy przekazanie cipher
+		// Zapisz dane z API
 		if err := sync.SaveAPIData(configPath, keysDir, syncResp.Data, m.cipher); err != nil {
 			fmt.Printf("Warning: Could not save API data: %v\n", err)
 			if err := sync.RestoreFromBackup(configPath, keysDir); err != nil {
@@ -180,6 +186,13 @@ func (m *programModel) handleApiKeyAndSync(apiKey string, isLocalMode bool) tea.
 				os.Exit(1)
 			}
 			m.uiModel.SetLocalMode(true)
+		} else {
+			// Wczytaj zapisaną konfigurację do modelu UI
+			if err := m.uiModel.GetConfig().Load(); err != nil {
+				fmt.Printf("Warning: Could not load saved configuration: %v\n", err)
+			}
+			// Odśwież listy w modelu UI
+			m.uiModel.UpdateLists()
 		}
 	}
 
@@ -196,19 +209,51 @@ func (m *programModel) View() string {
 }
 
 func main() {
+	m := initialModel()
+	var p *tea.Program
+
 	for {
-		m := initialModel()
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		// Tworzymy nowy program z odpowiednimi opcjami
+		p = tea.NewProgram(m, tea.WithAltScreen())
 		m.SetProgram(p)
 
-		if _, err := p.Run(); err != nil {
-			fmt.Printf("Error running program: %v", err)
-			os.Exit(1)
+		// Uruchamiamy program
+		model, err := p.Run()
+		if err != nil {
+			// Sprawdzamy specyficzne błędy, które możemy zignorować
+			if !strings.Contains(err.Error(), "program was killed") &&
+				!strings.Contains(err.Error(), "context canceled") {
+				fmt.Printf("Error running program: %v\n", err)
+				os.Exit(1)
+			}
 		}
 
-		// Jeśli nie jest to restart, wyjdź z pętli
-		if !m.restarting {
+		m = model.(*programModel)
+		if m.quitting {
 			break
+		}
+
+		// Jeśli mamy aktywne połączenie SSH
+		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
+			if session := sshClient.Session(); session != nil {
+				// Zwalniamy terminal przed rozpoczęciem sesji SSH
+				if err := p.ReleaseTerminal(); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
+					continue
+				}
+
+				// Konfigurujemy i uruchamiamy sesję SSH
+				if err := session.ConfigureTerminal("xterm-256color"); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to configure terminal: %v\n", err)
+				} else if err := session.StartShell(); err != nil {
+					fmt.Fprintf(os.Stderr, "Shell error: %v\n", err)
+				}
+
+				// Czyszczenie po sesji SSH
+				m.uiModel.SetSSHClient(nil)
+				m.uiModel.SetActiveView(ui.ViewMain)
+				m.updateCurrentView()
+			}
 		}
 	}
 }
