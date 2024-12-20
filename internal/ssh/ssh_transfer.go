@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,13 @@ func NewFileTransfer(cipher *crypto.Cipher) *FileTransfer {
 		cipher:    cipher,
 		connected: false,
 	}
+}
+
+func toSFTPPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ReplaceAll(path, "\\", "/")
+	}
+	return path
 }
 
 // Connect establishes an SSH, SCP, and SFTP connection
@@ -153,13 +161,13 @@ func (ft *FileTransfer) IsConnected() bool {
 }
 
 // ListLocalFiles returns a list of files in the local directory
+// ListLocalFiles returns a list of files in the local directory
 func (ft *FileTransfer) ListLocalFiles(path string) ([]os.FileInfo, error) {
 	dir, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open local directory: %v", err)
 	}
 	defer dir.Close()
-
 	return dir.Readdir(-1)
 }
 
@@ -172,6 +180,7 @@ func (ft *FileTransfer) ListRemoteFiles(path string) ([]os.FileInfo, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
+	path = toSFTPPath(path)
 	return ft.sftpClient.ReadDir(path)
 }
 
@@ -184,6 +193,7 @@ func (ft *FileTransfer) GetRemoteFileInfo(path string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
+	path = toSFTPPath(path)
 	return ft.sftpClient.Stat(path)
 }
 
@@ -196,10 +206,10 @@ func (ft *FileTransfer) CreateRemoteDirectory(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
+	path = toSFTPPath(path)
 	return ft.sftpClient.MkdirAll(path)
 }
 
-// RemoveRemoteFile removes a file or directory on the remote server
 func (ft *FileTransfer) RemoveRemoteFile(path string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -208,13 +218,12 @@ func (ft *FileTransfer) RemoveRemoteFile(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	// First, try to remove as a file
+	path = toSFTPPath(path)
 	err := ft.sftpClient.Remove(path)
 	if err == nil {
 		return nil
 	}
 
-	// If it fails, check if it's a directory
 	info, err := ft.sftpClient.Stat(path)
 	if err != nil {
 		return fmt.Errorf("failed to get file info: %v", err)
@@ -236,10 +245,11 @@ func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
 		return fmt.Errorf("not connected")
 	}
 
+	oldPath = toSFTPPath(oldPath)
+	newPath = toSFTPPath(newPath)
 	return ft.sftpClient.Rename(oldPath, newPath)
 }
 
-// GetRemoteHomeDir returns the home directory on the remote server
 func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -254,15 +264,22 @@ func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
 	}
 	defer session.Close()
 
-	output, err := session.Output("echo $HOME")
+	var cmd string
+	if runtime.GOOS == "windows" {
+		cmd = "echo %USERPROFILE%"
+	} else {
+		cmd = "echo $HOME"
+	}
+
+	output, err := session.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command: %v", err)
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	homePath := strings.TrimSpace(string(output))
+	return toSFTPPath(homePath), nil
 }
 
-// UploadFile uploads a file to the server using SCP
 func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
 	ft.mutex.Lock()
 	if !ft.connected {
@@ -303,6 +320,9 @@ func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan ch
 			Progress:  progressChan,
 		}
 	}
+
+	// Convert remote path for SFTP
+	remotePath = toSFTPPath(remotePath)
 
 	// Copy file to remote server
 	err = ft.scpClient.CopyFilePassThru(ctx, localFile, remotePath, perm, passThru)
@@ -346,6 +366,9 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 		}
 	}
 
+	// Convert remote path for SFTP
+	remotePath = toSFTPPath(remotePath)
+
 	// Copy file from remote server
 	err = ft.scpClient.CopyFromRemotePassThru(ctx, localFile, remotePath, passThru)
 	if err != nil {
@@ -355,7 +378,6 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 	return nil
 }
 
-// RemoveRemoteDirectoryRecursive removes a directory recursively on the remote server
 func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -364,13 +386,15 @@ func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
+	path = toSFTPPath(path)
 	entries, err := ft.sftpClient.ReadDir(path)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
 	for _, entry := range entries {
-		fullPath := filepath.Join(path, entry.Name())
+		// Używamy toSFTPPath dla każdej nowej ścieżki
+		fullPath := toSFTPPath(filepath.Join(path, entry.Name()))
 		if entry.IsDir() {
 			if err := ft.RemoveRemoteDirectoryRecursive(fullPath); err != nil {
 				return err
@@ -394,6 +418,9 @@ func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressCh
 	}
 	ft.mutex.Unlock()
 
+	// Konwersja zdalnej ścieżki
+	remotePath = toSFTPPath(remotePath)
+
 	// Create the destination directory
 	if err := ft.CreateRemoteDirectory(remotePath); err != nil {
 		return fmt.Errorf("failed to create remote directory: %v", err)
@@ -410,23 +437,21 @@ func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressCh
 			return err
 		}
 
-		remotePathFull := filepath.Join(remotePath, relPath)
+		// Konwersja pełnej ścieżki zdalnej
+		remotePathFull := toSFTPPath(filepath.Join(remotePath, relPath))
 
 		if info.IsDir() {
 			return ft.CreateRemoteDirectory(remotePathFull)
 		}
-
 		return ft.UploadFile(path, remotePathFull, progressChan)
 	})
 
 	if err != nil {
 		return fmt.Errorf("failed to upload directory: %v", err)
 	}
-
 	return nil
 }
 
-// DownloadDirectory downloads a directory from the server
 func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progressChan chan<- TransferProgress) error {
 	ft.mutex.Lock()
 	if !ft.connected {
@@ -434,6 +459,9 @@ func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progress
 		return fmt.Errorf("not connected")
 	}
 	ft.mutex.Unlock()
+
+	// Konwersja zdalnej ścieżki
+	remotePath = toSFTPPath(remotePath)
 
 	// Create local directory
 	if err := os.MkdirAll(localPath, 0755); err != nil {
@@ -448,7 +476,13 @@ func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progress
 
 	// Process each file/directory
 	for _, entry := range entries {
-		remoteSrcPath := filepath.Join(remotePath, entry.Name())
+		// Pomijamy "." i ".."
+		if entry.Name() == "." || entry.Name() == ".." {
+			continue
+		}
+
+		// Konwersja ścieżek
+		remoteSrcPath := toSFTPPath(filepath.Join(remotePath, entry.Name()))
 		localDstPath := filepath.Join(localPath, entry.Name())
 
 		if entry.IsDir() {
@@ -461,7 +495,6 @@ func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progress
 			}
 		}
 	}
-
 	return nil
 }
 

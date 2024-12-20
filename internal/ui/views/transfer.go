@@ -708,60 +708,59 @@ func (v *transferView) copyFile() tea.Cmd {
 
 // Dodaj nowe funkcje do obsługi kopiowania folderów
 func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
-	// Utwórz katalog na zdalnym serwerze
+	remotePath = toSFTPPath(remotePath)
 	if err := transfer.CreateRemoteDirectory(remotePath); err != nil {
 		return fmt.Errorf("failed to create remote directory: %v", err)
 	}
 
-	// Przejdź przez wszystkie pliki w lokalnym katalogu
 	return filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Oblicz względną ścieżkę
 		relPath, err := filepath.Rel(localPath, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get relative path: %v", err)
 		}
 
-		// Utwórz pełną ścieżkę zdalną
-		remotePathFull := filepath.Join(remotePath, relPath)
+		// Konwersja ścieżki na format SFTP
+		remotePathFull := toSFTPPath(filepath.Join(remotePath, relPath))
 
 		if info.IsDir() {
-			// Utwórz katalog na zdalnym serwerze
 			return transfer.CreateRemoteDirectory(remotePathFull)
-		} else {
-			// Prześlij plik
-			return transfer.UploadFile(path, remotePathFull, progressChan)
 		}
+
+		return transfer.UploadFile(path, remotePathFull, progressChan)
 	})
 }
 
 func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
-	// Utwórz lokalny katalog
 	if err := os.MkdirAll(localPath, 0755); err != nil {
 		return fmt.Errorf("failed to create local directory: %v", err)
 	}
 
-	// Pobierz listę plików z katalogu zdalnego
+	remotePath = toSFTPPath(remotePath)
 	entries, err := transfer.ListRemoteFiles(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
-	// Rekurencyjnie kopiuj zawartość
 	for _, entry := range entries {
-		remoteSrcPath := filepath.Join(remotePath, entry.Name())
+		// Pomijamy "." i ".."
+		if entry.Name() == "." || entry.Name() == ".." {
+			continue
+		}
+
+		remoteSrcPath := toSFTPPath(filepath.Join(remotePath, entry.Name()))
 		localDstPath := filepath.Join(localPath, entry.Name())
 
 		if entry.IsDir() {
 			if err := v.copyDirectoryFromRemote(remoteSrcPath, localDstPath, transfer, progressChan); err != nil {
-				return err
+				return fmt.Errorf("failed to copy remote directory %s: %v", entry.Name(), err)
 			}
 		} else {
 			if err := transfer.DownloadFile(remoteSrcPath, localDstPath, progressChan); err != nil {
-				return err
+				return fmt.Errorf("failed to download file %s: %v", entry.Name(), err)
 			}
 		}
 	}
@@ -1746,4 +1745,11 @@ func (v *transferView) renderFooter() string {
 	}
 
 	return footerContent.String()
+}
+
+func toSFTPPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ReplaceAll(path, "\\", "/")
+	}
+	return path
 }

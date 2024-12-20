@@ -85,7 +85,10 @@ func saveHostKey(host *models.Host) error {
 		return err
 	}
 
-	// Pobierz nowy klucz hosta
+	if !checkSSHKeyscanAvailable() {
+		return fmt.Errorf("ssh-keyscan not found - please install OpenSSH")
+	}
+
 	scanCmd := fmt.Sprintf("ssh-keyscan -p %s %s 2>/dev/null", host.Port, host.IP)
 	cmd := exec.Command("sh", "-c", scanCmd)
 	if runtime.GOOS == "windows" {
@@ -97,7 +100,6 @@ func saveHostKey(host *models.Host) error {
 		return fmt.Errorf("failed to scan host key: %v", err)
 	}
 
-	// Wczytaj istniejące klucze
 	existingContent := ""
 	if _, err := os.Stat(knownHostsPath); err == nil {
 		content, err := os.ReadFile(knownHostsPath)
@@ -107,10 +109,8 @@ func saveHostKey(host *models.Host) error {
 		existingContent = string(content)
 	}
 
-	// Format zapisu hosta
 	hostFormat := fmt.Sprintf("[%s]:%s", host.IP, host.Port)
 
-	// Przetwórz nowe klucze
 	var newKeys []string
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
@@ -118,14 +118,12 @@ func saveHostKey(host *models.Host) error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Zamień domyślny format hosta na nasz format
 		parts := strings.Fields(line)
 		if len(parts) >= 3 {
 			newKeys = append(newKeys, fmt.Sprintf("%s %s %s", hostFormat, parts[1], parts[2]))
 		}
 	}
 
-	// Przetwórz istniejące klucze
 	var finalKeys []string
 	if existingContent != "" {
 		scanner := bufio.NewScanner(strings.NewReader(existingContent))
@@ -140,13 +138,11 @@ func saveHostKey(host *models.Host) error {
 		}
 	}
 
-	// Dodaj nowe klucze
 	finalKeys = append(finalKeys, newKeys...)
 
-	// Zapisz plik
 	content := strings.Join(finalKeys, "\n") + "\n"
 	if err := os.WriteFile(knownHostsPath, []byte(content), 0600); err != nil {
-		return fmt.Errorf("failed to write known_hosts file: %v", err)
+		return fmt.Errorf("failed to write known_hosts: %v", err)
 	}
 
 	return nil
@@ -318,4 +314,14 @@ func (s *SSHClient) GetPasswords() []models.Password {
 
 func (c *SSHClient) Session() *SSHSession {
 	return c.session
+}
+
+func checkSSHKeyscanAvailable() bool {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("where", "ssh-keyscan")
+		if err := cmd.Run(); err != nil {
+			return false
+		}
+	}
+	return true
 }
