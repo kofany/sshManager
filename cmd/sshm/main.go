@@ -234,7 +234,6 @@ func main() {
 		}
 
 		// Jeśli mamy aktywne połączenie SSH
-		// W funkcji main() w miejscu gdzie obsługujemy sesję SSH
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
 				// Zwalniamy terminal przed rozpoczęciem sesji SSH
@@ -248,11 +247,6 @@ func main() {
 					fmt.Fprintf(os.Stderr, "Failed to configure terminal: %v\n", err)
 				} else if err := session.StartShell(); err != nil {
 					fmt.Fprintf(os.Stderr, "Shell error: %v\n", err)
-				}
-
-				// Dodajemy jawne przywrócenie terminala po sesji SSH
-				if err := term.Restore(int(os.Stdin.Fd()), session.GetOriginalTermState()); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to restore terminal: %v\n", err)
 				}
 
 				// Czyszczenie po sesji SSH
