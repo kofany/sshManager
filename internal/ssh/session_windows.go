@@ -119,14 +119,18 @@ func (s *SSHSession) StartShell() error {
 		go s.keepAliveLoop()
 	}
 
-	// Przejście w tryb raw dla terminala
-	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
+	// Przejście w tryb raw dla terminala i przypisanie do s.originalTermState
+	if _, err := term.MakeRaw(int(os.Stdin.Fd())); err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
 
-	// Upewniamy się, że terminal zostanie przywrócony
-	defer term.Restore(int(os.Stdin.Fd()), rawState)
+	// Dodajemy defer, który wykona się nawet w przypadku błędu
+	defer func() {
+		// Przywracamy oryginalny stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to restore terminal state: %v\n", err)
+		}
+	}()
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -316,4 +320,8 @@ func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
 	s.keepAlive = duration
+}
+
+func (s *SSHSession) GetOriginalTermState() *term.State {
+	return s.originalTermState
 }

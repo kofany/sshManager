@@ -298,3 +298,7 @@ func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	defer s.stateMutex.Unlock()
 	s.keepAlive = duration
 }
+
+func (s *SSHSession) GetOriginalTermState() *term.State {
+	return s.originalTermState
+}
