@@ -39,9 +39,6 @@ func getAppKnownHostsPath() (string, error) {
 	sshDir := filepath.Join(filepath.Dir(configDir), "ssh")
 	knownHostsPath := filepath.Join(sshDir, knownHostsFileName)
 
-	// Wydrukuj ścieżkę dla celów diagnostycznych
-	fmt.Printf("Known hosts path: %s\n", knownHostsPath)
-
 	return knownHostsPath, nil
 }
 
