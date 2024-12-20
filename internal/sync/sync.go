@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
 	"strconv"
@@ -18,7 +17,8 @@ import (
 )
 
 const (
-	ApiBaseURL = "https://sshm.io/api/v1/"
+	ApiBaseURL   = "https://sshm.io/api/v1/"
+	KeyFilePerms = 0600
 )
 
 type SyncResponse struct {
@@ -248,7 +248,6 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		}
 	}
 
-	// Zapisz nowe klucze
 	for _, key := range config.Keys {
 		if key.KeyData == "" || key.Description == "" {
 			continue
@@ -258,6 +257,7 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		safeDesc := sanitizeFilename(key.Description)
 		keyContent := key.KeyData
 
+		// Deszyfrowanie jeśli potrzebne
 		if cipher != nil {
 			decrypted, err := cipher.Decrypt(keyContent)
 			if err != nil {
@@ -266,11 +266,8 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 			keyContent = decrypted
 		}
 
-		// Normalizacja końców linii
-		if runtime.GOOS == "windows" {
-			keyContent = strings.ReplaceAll(keyContent, "\n", "\r\n")
-		}
-		keyContent = strings.TrimSpace(keyContent) + "\n"
+		// Normalizacja zawartości klucza
+		keyContent = normalizeKeyContent(keyContent)
 
 		// Konstruowanie bezpiecznej ścieżki
 		keyPath := filepath.Clean(filepath.Join(keysDir, safeDesc+".key"))
@@ -278,12 +275,18 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 			return fmt.Errorf("invalid key path detected: %s", keyPath)
 		}
 
+		// Upewnij się, że katalog istnieje
+		keyDir := filepath.Dir(keyPath)
+		if err := os.MkdirAll(keyDir, 0700); err != nil {
+			return fmt.Errorf("failed to create key directory: %v", err)
+		}
+
 		fmt.Printf("Saving key: %s to %s\n", safeDesc, keyPath)
 
 		// Próba zapisu z powtórzeniami
 		var writeErr error
 		for attempts := 0; attempts < 3; attempts++ {
-			if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
+			if err := os.WriteFile(keyPath, []byte(keyContent), KeyFilePerms); err != nil {
 				writeErr = err
 				time.Sleep(100 * time.Millisecond)
 				continue
@@ -301,9 +304,10 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		if err != nil {
 			return fmt.Errorf("error verifying key file %s: %v", keyPath, err)
 		}
-		normalizedContent := strings.ReplaceAll(string(content), "\r\n", "\n")
-		normalizedKeyContent := strings.ReplaceAll(keyContent, "\r\n", "\n")
-		if normalizedContent != normalizedKeyContent {
+
+		// Porównanie zawartości (po normalizacji)
+		savedContent := normalizeKeyContent(string(content))
+		if savedContent != keyContent {
 			return fmt.Errorf("key file verification failed for %s: content mismatch", keyPath)
 		}
 	}
@@ -510,4 +514,15 @@ func PushToAPI(apiKey string, configPath, keysDir string, cipher *crypto.Cipher)
 	}
 
 	return nil
+}
+
+func normalizeKeyContent(content string) string {
+	// Zawsze używamy uniksowych końców linii dla kluczy SSH
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+
+	// Upewniamy się że jest dokładnie jeden znak nowej linii na końcu
+	content = strings.TrimSpace(content) + "\n"
+
+	return content
 }

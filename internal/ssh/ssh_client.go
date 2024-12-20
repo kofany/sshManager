@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -23,9 +22,10 @@ type SSHClient struct {
 }
 
 type HostKeyVerificationRequired struct {
-	IP        string
-	Port      string
-	PublicKey ssh.PublicKey // Dodane pole
+	IP          string
+	Port        string
+	Fingerprint string
+	PublicKey   ssh.PublicKey
 }
 
 const (
@@ -47,56 +47,20 @@ func getAppKnownHostsPath() (string, error) {
 	return filepath.Join(sshDir, knownHostsFileName), nil
 }
 
-// internal/ssh/ssh_client.go
-
-// checkKnownHost sprawdza czy klucz hosta jest znany
-func checkKnownHost(host *models.Host) error {
+func saveHostKey(host *models.Host, publicKey ssh.PublicKey) error {
 	knownHostsPath, err := getAppKnownHostsPath()
 	if err != nil {
 		return err
 	}
 
-	// Sprawdź czy plik istnieje
-	if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
-		return &HostKeyVerificationRequired{IP: host.IP, Port: host.Port}
-	}
+	// Format hosta
+	hostStr := fmt.Sprintf("[%s]:%s", host.IP, host.Port)
 
-	// Format hosta do sprawdzenia - używamy dokładnej nazwy hosta bez hasha
-	hostToCheck := fmt.Sprintf("[%s]:%s", host.IP, host.Port)
+	// Format linii w known_hosts
+	line := knownhosts.Line([]string{hostStr}, publicKey)
 
-	// Wczytaj zawartość pliku
-	content, err := os.ReadFile(knownHostsPath)
-	if err != nil {
-		return err
-	}
-
-	// Sprawdź każdą linię
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, hostToCheck) {
-			return nil // Znaleziono hosta
-		}
-	}
-
-	return &HostKeyVerificationRequired{IP: host.IP, Port: host.Port}
-}
-
-// internal/ssh/ssh_client.go
-
-func saveHostKey(host *models.Host, hostKey ssh.PublicKey) error {
-	knownHostsPath, err := getAppKnownHostsPath()
-	if err != nil {
-		return err
-	}
-
-	// Format zapisu hosta
-	hostFormat := fmt.Sprintf("[%s]:%s", host.IP, host.Port)
-
-	// Przygotuj linię z kluczem w formacie known_hosts
-	keyLine := knownhosts.Line([]string{hostFormat}, hostKey)
-
-	// Wczytaj istniejące klucze
-	var existingContent string
+	// Wczytaj istniejące wpisy
+	existingContent := ""
 	if _, err := os.Stat(knownHostsPath); err == nil {
 		content, err := os.ReadFile(knownHostsPath)
 		if err != nil {
@@ -107,21 +71,16 @@ func saveHostKey(host *models.Host, hostKey ssh.PublicKey) error {
 
 	// Usuń stare wpisy dla tego hosta
 	var finalLines []string
-	if existingContent != "" {
-		scanner := bufio.NewScanner(strings.NewReader(existingContent))
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			if !strings.Contains(line, hostFormat) {
-				finalLines = append(finalLines, line)
-			}
+	scanner := bufio.NewScanner(strings.NewReader(existingContent))
+	for scanner.Scan() {
+		lineText := scanner.Text()
+		if !strings.Contains(lineText, hostStr) {
+			finalLines = append(finalLines, lineText)
 		}
 	}
 
-	// Dodaj nowy klucz
-	finalLines = append(finalLines, keyLine)
+	// Dodaj nowy wpis
+	finalLines = append(finalLines, line)
 
 	// Zapisz plik
 	content := strings.Join(finalLines, "\n") + "\n"
@@ -148,20 +107,31 @@ func (e *HostKeyVerificationRequired) Error() string {
 func GetHostKeyFingerprint(host *models.Host) (string, error) {
 	var result string
 
+	// Konfiguracja do tymczasowego połączenia
 	config := &ssh.ClientConfig{
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			result = ssh.FingerprintSHA256(key)
 			return nil
 		},
+		User: host.Login,
+		Auth: []ssh.AuthMethod{
+			ssh.Password("dummy"), // Używamy dowolnego hasła, bo interesuje nas tylko handshake
+		},
+		Timeout: 10 * time.Second,
 	}
 
+	// Próba połączenia - potrzebujemy tylko handshake'a
 	conn, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", host.IP, host.Port), config)
-	if err != nil && result != "" {
-		return result, nil
-	} else if err != nil {
+	if err != nil {
+		// Jeśli mamy fingerprint, ignorujemy błąd auth
+		if result != "" {
+			return result, nil
+		}
 		return "", fmt.Errorf("failed to get host key: %v", err)
 	}
-	defer conn.Close()
+	if conn != nil {
+		conn.Close()
+	}
 
 	if result == "" {
 		return "", fmt.Errorf("no host key received")
@@ -170,118 +140,92 @@ func GetHostKeyFingerprint(host *models.Host) (string, error) {
 	return result, nil
 }
 
+// Zmodyfikowana funkcja Connect
 func (s *SSHClient) Connect(host *models.Host, authData string) error {
-	// Sprawdzenie klucza hosta z użyciem naszego mechanizmu
-	if err := checkKnownHost(host); err != nil {
-		return err
+	// Konfiguracja autoryzacji
+	var authMethod ssh.AuthMethod
+	if host.PasswordID < 0 {
+		key, err := os.ReadFile(authData)
+		if err != nil {
+			return fmt.Errorf("failed to read SSH key: %v", err)
+		}
+		signer, err := ssh.ParsePrivateKey(key)
+		if err != nil {
+			return fmt.Errorf("failed to parse SSH key: %v", err)
+		}
+		authMethod = ssh.PublicKeys(signer)
+	} else {
+		authMethod = ssh.Password(authData)
 	}
 
-	// Tworzymy kontekst z timeoutem
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Kanał do komunikacji błędów
-	errChan := make(chan error, 1)
-
-	go func() {
-		// Konfiguracja autoryzacji
-		var authMethod ssh.AuthMethod
-		if host.PasswordID < 0 {
-			key, err := os.ReadFile(authData)
-			if err != nil {
-				errChan <- fmt.Errorf("failed to read SSH key: %v", err)
-				return
-			}
-			signer, err := ssh.ParsePrivateKey(key)
-			if err != nil {
-				errChan <- fmt.Errorf("failed to parse SSH key: %v", err)
-				return
-			}
-			authMethod = ssh.PublicKeys(signer)
-		} else {
-			authMethod = ssh.Password(authData)
-		}
-
-		// Pobranie ścieżki do known_hosts
-		knownHostsPath, err := getAppKnownHostsPath()
-		if err != nil {
-			errChan <- fmt.Errorf("failed to get known_hosts path: %v", err)
-			return
-		}
-
-		// Utworzenie callbacka weryfikującego klucz hosta
-		hostKeyCallback, err := knownhosts.New(knownHostsPath)
-		if err != nil {
-			errChan <- fmt.Errorf("failed to create hostKeyCallback: %v", err)
-			return
-		}
-
-		// Konfiguracja klienta SSH
-		config := &ssh.ClientConfig{
-			User:            host.Login,
-			Auth:            []ssh.AuthMethod{authMethod},
-			HostKeyCallback: hostKeyCallback,
-			Timeout:         10 * time.Second,
-		}
-
-		// Nawiązanie połączenia
-		client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", host.IP, host.Port), config)
-		if err != nil {
-			errChan <- fmt.Errorf("failed to connect: %v", err)
-			return
-		}
-
-		// Utworzenie sesji SSH
-		session, err := NewSSHSession(client)
-		if err != nil {
-			client.Close()
-			errChan <- fmt.Errorf("failed to create session: %v", err)
-			return
-		}
-
-		s.session = session
-		s.currentHost = host
-		errChan <- nil
-	}()
-
-	// Oczekiwanie na wynik lub timeout
-	select {
-	case err := <-errChan:
-		if err != nil {
-			return fmt.Errorf("connection failed: %v", err)
-		}
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("connection timeout: host is unreachable")
+	// Pobranie ścieżki do known_hosts
+	knownHostsPath, err := getAppKnownHostsPath()
+	if err != nil {
+		return fmt.Errorf("failed to get known_hosts path: %v", err)
 	}
-}
 
-func (s *SSHClient) ConnectWithAcceptedKey(host *models.Host, authData string) error {
-	// Tworzymy tymczasową konfigurację do pobrania klucza hosta
+	var fingerprint string
+
+	// Konfiguracja klienta SSH z callbackiem zbierającym klucz hosta
 	config := &ssh.ClientConfig{
+		User: host.Login,
+		Auth: []ssh.AuthMethod{authMethod},
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-			// Zapisz klucz hosta
-			if err := saveHostKey(host, key); err != nil {
-				return fmt.Errorf("failed to save host key: %v", err)
+			fingerprint = ssh.FingerprintSHA256(key)
+
+			// Sprawdź czy klucz jest już znany
+			knownHostsCallback, err := knownhosts.New(knownHostsPath)
+			if err == nil {
+				err = knownHostsCallback(hostname, remote, key)
+				if err == nil {
+					return nil // Klucz jest znany i poprawny
+				}
 			}
-			return nil
+
+			// Klucz nie jest znany - zwróć błąd weryfikacji
+			return &HostKeyVerificationRequired{
+				IP:          host.IP,
+				Port:        host.Port,
+				Fingerprint: fingerprint,
+				PublicKey:   key,
+			}
 		},
 		Timeout: 10 * time.Second,
 	}
 
-	// Wykonaj próbne połączenie aby pobrać klucz
-	tmpConn, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", host.IP, host.Port), config)
+	// Próba połączenia
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", host.IP, host.Port), config)
 	if err != nil {
-		if !strings.Contains(err.Error(), "ssh: must specify HostKeyCallback") {
-			return fmt.Errorf("failed to get host key: %v", err)
+		if verificationErr, ok := err.(*HostKeyVerificationRequired); ok {
+			return verificationErr
 		}
-	}
-	if tmpConn != nil {
-		tmpConn.Close()
+		return fmt.Errorf("failed to connect: %v", err)
 	}
 
-	// Teraz wykonaj właściwe połączenie
-	return s.Connect(host, authData)
+	// Utworzenie sesji SSH
+	session, err := NewSSHSession(client)
+	if err != nil {
+		client.Close()
+		return fmt.Errorf("failed to create session: %v", err)
+	}
+
+	s.session = session
+	s.currentHost = host
+	return nil
+}
+
+func (s *SSHClient) ConnectWithAcceptedKey(host *models.Host, authData string) error {
+	// Najpierw próbujemy połączenia, aby uzyskać klucz publiczny
+	err := s.Connect(host, authData)
+	if verificationErr, ok := err.(*HostKeyVerificationRequired); ok {
+		// Zapisujemy nowy klucz hosta do known_hosts
+		if err := saveHostKey(host, verificationErr.PublicKey); err != nil {
+			return fmt.Errorf("failed to save host key: %v", err)
+		}
+		// Ponowna próba połączenia
+		return s.Connect(host, authData)
+	}
+	return err
 }
 
 func (s *SSHClient) IsConnected() bool {
