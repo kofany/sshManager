@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"golang.org/x/term"
 )
 
 type SSHClient struct {
@@ -303,6 +304,12 @@ func (s *SSHClient) IsConnected() bool {
 
 func (s *SSHClient) Disconnect() {
 	if s.session != nil {
+		// Przed zamknięciem sesji upewnij się, że terminal jest przywrócony
+		if s.session.GetOriginalTermState() != nil {
+			if err := term.Restore(int(os.Stdin.Fd()), s.session.GetOriginalTermState()); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to restore terminal state: %v\n", err)
+			}
+		}
 		s.session.Close()
 		s.session = nil
 	}
