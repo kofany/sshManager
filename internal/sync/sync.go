@@ -8,9 +8,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
 	"strconv"
+	"strings"
+	"time"
+	"unicode"
 )
 
 const (
@@ -126,6 +130,8 @@ func SyncWithAPI(apiKey string) (*SyncResponse, error) {
 }
 
 func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Cipher) error {
+	fmt.Printf("Starting SaveAPIData - config: %s, keys dir: %s\n", configPath, keysDir)
+
 	// Przygotuj strukturę danych do lokalnego zapisu
 	config := struct {
 		Hosts     []models.Host     `json:"hosts"`
@@ -137,6 +143,7 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		Keys:      make([]models.Key, 0),
 	}
 
+	// Przetwarzanie hostów
 	for _, h := range data.Hosts {
 		hostMap, ok := h.(map[string]interface{})
 		if !ok {
@@ -181,6 +188,7 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		config.Hosts = append(config.Hosts, host)
 	}
 
+	// Przetwarzanie haseł
 	for _, p := range data.Passwords {
 		passMap, ok := p.(map[string]interface{})
 		if !ok {
@@ -209,6 +217,7 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		config.Keys = append(config.Keys, key)
 	}
 
+	// Zapisz konfigurację
 	jsonData, err := json.MarshalIndent(config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("error marshaling config data: %v", err)
@@ -218,6 +227,12 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		return fmt.Errorf("error saving config file: %v", err)
 	}
 
+	// Upewnij się, że katalog kluczy istnieje
+	if err := os.MkdirAll(keysDir, 0700); err != nil {
+		return fmt.Errorf("error creating keys directory: %v", err)
+	}
+
+	// Usuń istniejące pliki kluczy
 	entries, err := os.ReadDir(keysDir)
 	if err != nil {
 		return fmt.Errorf("error reading keys directory: %v", err)
@@ -227,23 +242,22 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 		if entry.IsDir() || filepath.Ext(entry.Name()) == ".old" {
 			continue
 		}
-
 		keyPath := filepath.Join(keysDir, entry.Name())
 		if err := os.Remove(keyPath); err != nil {
 			return fmt.Errorf("error removing key file %s: %v", entry.Name(), err)
 		}
 	}
 
-	if err := os.MkdirAll(keysDir, 0700); err != nil {
-		return fmt.Errorf("error creating keys directory: %v", err)
-	}
-
+	// Zapisz nowe klucze
 	for _, key := range config.Keys {
 		if key.KeyData == "" || key.Description == "" {
 			continue
 		}
 
+		// Sanityzacja nazwy pliku
+		safeDesc := sanitizeFilename(key.Description)
 		keyContent := key.KeyData
+
 		if cipher != nil {
 			decrypted, err := cipher.Decrypt(keyContent)
 			if err != nil {
@@ -252,13 +266,60 @@ func SaveAPIData(configPath, keysDir string, data SyncData, cipher *crypto.Ciphe
 			keyContent = decrypted
 		}
 
-		keyPath := filepath.Join(keysDir, key.Description+".key")
-		if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
-			return fmt.Errorf("error saving key file %s: %v", keyPath, err)
+		// Normalizacja końców linii
+		if runtime.GOOS == "windows" {
+			keyContent = strings.ReplaceAll(keyContent, "\n", "\r\n")
+		}
+		keyContent = strings.TrimSpace(keyContent) + "\n"
+
+		// Konstruowanie bezpiecznej ścieżki
+		keyPath := filepath.Clean(filepath.Join(keysDir, safeDesc+".key"))
+		if !strings.HasPrefix(keyPath, filepath.Clean(keysDir)) {
+			return fmt.Errorf("invalid key path detected: %s", keyPath)
+		}
+
+		fmt.Printf("Saving key: %s to %s\n", safeDesc, keyPath)
+
+		// Próba zapisu z powtórzeniami
+		var writeErr error
+		for attempts := 0; attempts < 3; attempts++ {
+			if err := os.WriteFile(keyPath, []byte(keyContent), 0600); err != nil {
+				writeErr = err
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			writeErr = nil
+			break
+		}
+
+		if writeErr != nil {
+			return fmt.Errorf("error saving key file %s after multiple attempts: %v", keyPath, writeErr)
+		}
+
+		// Weryfikacja zapisanego pliku
+		content, err := os.ReadFile(keyPath)
+		if err != nil {
+			return fmt.Errorf("error verifying key file %s: %v", keyPath, err)
+		}
+		normalizedContent := strings.ReplaceAll(string(content), "\r\n", "\n")
+		normalizedKeyContent := strings.ReplaceAll(keyContent, "\r\n", "\n")
+		if normalizedContent != normalizedKeyContent {
+			return fmt.Errorf("key file verification failed for %s: content mismatch", keyPath)
 		}
 	}
 
+	fmt.Println("SaveAPIData completed successfully")
 	return nil
+}
+
+// Funkcja pomocnicza do sanityzacji nazw plików
+func sanitizeFilename(filename string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, filename)
 }
 
 func RestoreFromBackup(configPath, keysDir string) error {
