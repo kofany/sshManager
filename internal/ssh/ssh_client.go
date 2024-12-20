@@ -37,12 +37,14 @@ func getAppKnownHostsPath() (string, error) {
 		return "", fmt.Errorf("could not get config directory: %v", err)
 	}
 
+	// Użyj jawnie filepath.Join dla poprawnej obsługi ścieżek
 	sshDir := filepath.Join(filepath.Dir(configDir), "ssh")
-	if err := os.MkdirAll(sshDir, 0700); err != nil {
-		return "", fmt.Errorf("could not create ssh directory: %v", err)
-	}
+	knownHostsPath := filepath.Join(sshDir, knownHostsFileName)
 
-	return filepath.Join(sshDir, knownHostsFileName), nil
+	// Wydrukuj ścieżkę dla celów diagnostycznych
+	fmt.Printf("Known hosts path: %s\n", knownHostsPath)
+
+	return knownHostsPath, nil
 }
 
 // checkKnownHost sprawdza czy klucz hosta jest znany
@@ -80,50 +82,39 @@ func checkKnownHost(host *models.Host) error {
 func saveHostKey(host *models.Host) error {
 	knownHostsPath, err := getAppKnownHostsPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get known_hosts path: %v", err)
 	}
 
-	var output []byte
+	// Najpierw sprawdźmy, czy możemy utworzyć katalog dla known_hosts
+	knownHostsDir := filepath.Dir(knownHostsPath)
+	if err := os.MkdirAll(knownHostsDir, 0700); err != nil {
+		return fmt.Errorf("failed to create directory %s: %v", knownHostsDir, err)
+	}
+
+	// Wykonaj ssh-keyscan z pełną komendą
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		// Użyj pełnej ścieżki do ssh-keyscan z OpenSSH na Windows
-		programFiles := os.Getenv("ProgramFiles")
-		sshKeyscan := filepath.Join(programFiles, "OpenSSH", "ssh-keyscan.exe")
-
-		cmd := exec.Command(sshKeyscan, "-p", host.Port, host.IP)
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			// Jeśli nie znaleziono ssh-keyscan, spróbuj alternatywną ścieżkę
-			windowsSystem32 := os.Getenv("SystemRoot") + "\\System32\\OpenSSH"
-			sshKeyscan = filepath.Join(windowsSystem32, "ssh-keyscan.exe")
-			cmd = exec.Command(sshKeyscan, "-p", host.Port, host.IP)
-			output, err = cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to scan host key - please check if OpenSSH is installed: %v", err)
-			}
-		}
+		// Na Windows używamy jawnie cmd.exe
+		command := fmt.Sprintf("ssh-keyscan -p %s %s", host.Port, host.IP)
+		cmd = exec.Command("cmd.exe", "/C", command)
 	} else {
-		// Unix-like systemy
-		cmd := exec.Command("ssh-keyscan", "-p", host.Port, host.IP)
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to scan host key: %v", err)
-		}
+		cmd = exec.Command("ssh-keyscan", "-p", host.Port, host.IP)
 	}
 
-	// Wczytaj istniejące klucze
-	existingContent := ""
-	if _, err := os.Stat(knownHostsPath); err == nil {
-		content, err := os.ReadFile(knownHostsPath)
-		if err != nil {
-			return fmt.Errorf("failed to read known_hosts: %v", err)
-		}
-		existingContent = string(content)
+	// Zbieramy zarówno stdout jak i stderr
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh-keyscan failed: %v, output: %s", err, string(output))
+	}
+
+	if len(output) == 0 {
+		return fmt.Errorf("ssh-keyscan returned no output")
 	}
 
 	// Format zapisu hosta
 	hostFormat := fmt.Sprintf("[%s]:%s", host.IP, host.Port)
 
-	// Przetwórz nowe klucze
+	// Przygotuj nowe klucze
 	var newKeys []string
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
@@ -137,33 +128,36 @@ func saveHostKey(host *models.Host) error {
 		}
 	}
 
-	// Przetwórz istniejące klucze
-	var finalKeys []string
-	if existingContent != "" {
-		scanner := bufio.NewScanner(strings.NewReader(existingContent))
+	if len(newKeys) == 0 {
+		return fmt.Errorf("no valid keys found in ssh-keyscan output")
+	}
+
+	// Wczytaj istniejące klucze jeśli plik istnieje
+	var existingKeys []string
+	if content, err := os.ReadFile(knownHostsPath); err == nil {
+		scanner := bufio.NewScanner(strings.NewReader(string(content)))
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
 			if !strings.Contains(line, hostFormat) {
-				finalKeys = append(finalKeys, line)
+				existingKeys = append(existingKeys, line)
 			}
 		}
 	}
 
-	// Dodaj nowe klucze
-	finalKeys = append(finalKeys, newKeys...)
-
-	// Upewnij się, że katalog istnieje
-	if err := os.MkdirAll(filepath.Dir(knownHostsPath), 0700); err != nil {
-		return fmt.Errorf("failed to create directory for known_hosts: %v", err)
+	// Połącz istniejące i nowe klucze
+	allKeys := append(existingKeys, newKeys...)
+	content := strings.Join(allKeys, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
 	}
 
-	// Zapisz plik
-	content := strings.Join(finalKeys, "\n") + "\n"
-	if err := os.WriteFile(knownHostsPath, []byte(content), 0600); err != nil {
-		return fmt.Errorf("failed to write known_hosts file: %v", err)
+	// Zapisz z odpowiednimi uprawnieniami
+	err = os.WriteFile(knownHostsPath, []byte(content), 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write known_hosts file %s: %v", knownHostsPath, err)
 	}
 
 	return nil
