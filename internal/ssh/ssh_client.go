@@ -85,38 +85,45 @@ func saveHostKey(host *models.Host) error {
 		return fmt.Errorf("failed to get known_hosts path: %v", err)
 	}
 
-	// Najpierw sprawdźmy, czy możemy utworzyć katalog dla known_hosts
-	knownHostsDir := filepath.Dir(knownHostsPath)
-	if err := os.MkdirAll(knownHostsDir, 0700); err != nil {
-		return fmt.Errorf("failed to create directory %s: %v", knownHostsDir, err)
+	if err := os.MkdirAll(filepath.Dir(knownHostsPath), 0700); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
-	// Wykonaj ssh-keyscan z pełną komendą
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		// Na Windows używamy jawnie cmd.exe
-		command := fmt.Sprintf("ssh-keyscan -p %s %s", host.Port, host.IP)
-		cmd = exec.Command("cmd.exe", "/C", command)
-	} else {
-		cmd = exec.Command("ssh-keyscan", "-p", host.Port, host.IP)
+	// Lista typów kluczy do sprawdzenia
+	keyTypes := []string{
+		"ed25519",
+		"ecdsa-sha2-nistp256",
+		"ecdsa-sha2-nistp384",
+		"ecdsa-sha2-nistp521",
+		"rsa",
 	}
 
-	// Zbieramy zarówno stdout jak i stderr
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ssh-keyscan failed: %v, output: %s", err, string(output))
+	var successfulOutput []byte
+	for _, keyType := range keyTypes {
+		var cmd *exec.Cmd
+		if runtime.GOOS == "windows" {
+			command := fmt.Sprintf("ssh-keyscan -t %s -p %s %s", keyType, host.Port, host.IP)
+			cmd = exec.Command("cmd.exe", "/C", command)
+		} else {
+			cmd = exec.Command("ssh-keyscan", "-t", keyType, "-p", host.Port, host.IP)
+		}
+
+		output, err := cmd.CombinedOutput()
+		if err == nil && len(output) > 0 && !strings.Contains(string(output), "choose_kex: unsupported KEX method") {
+			// Znaleźliśmy działający typ klucza
+			successfulOutput = output
+			break
+		}
 	}
 
-	if len(output) == 0 {
-		return fmt.Errorf("ssh-keyscan returned no output")
+	if len(successfulOutput) == 0 {
+		return fmt.Errorf("failed to get host key with any key type")
 	}
 
-	// Format zapisu hosta
 	hostFormat := fmt.Sprintf("[%s]:%s", host.IP, host.Port)
 
-	// Przygotuj nowe klucze
 	var newKeys []string
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	scanner := bufio.NewScanner(strings.NewReader(string(successfulOutput)))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -129,10 +136,10 @@ func saveHostKey(host *models.Host) error {
 	}
 
 	if len(newKeys) == 0 {
-		return fmt.Errorf("no valid keys found in ssh-keyscan output")
+		return fmt.Errorf("no valid keys found in output")
 	}
 
-	// Wczytaj istniejące klucze jeśli plik istnieje
+	// Wczytaj istniejące klucze
 	var existingKeys []string
 	if content, err := os.ReadFile(knownHostsPath); err == nil {
 		scanner := bufio.NewScanner(strings.NewReader(string(content)))
@@ -147,22 +154,12 @@ func saveHostKey(host *models.Host) error {
 		}
 	}
 
-	// Połącz istniejące i nowe klucze
+	// Połącz i zapisz klucze
 	allKeys := append(existingKeys, newKeys...)
-	content := strings.Join(allKeys, "\n")
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
+	content := strings.Join(allKeys, "\n") + "\n"
 
-	// Zapisz z odpowiednimi uprawnieniami
-	err = os.WriteFile(knownHostsPath, []byte(content), 0600)
-	if err != nil {
-		return fmt.Errorf("failed to write known_hosts file %s: %v", knownHostsPath, err)
-	}
-
-	return nil
+	return os.WriteFile(knownHostsPath, []byte(content), 0600)
 }
-
 func NewSSHClient(passwords []models.Password) *SSHClient {
 	return &SSHClient{
 		passwords: passwords,
