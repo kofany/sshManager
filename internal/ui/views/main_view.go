@@ -140,6 +140,7 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.popup = nil
 					return v, nil
 				}
+				// w main_view.go
 
 			case "y", "Y":
 				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
@@ -155,14 +156,13 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err != nil {
 						v.popup = components.NewPopup(
 							components.PopupMessage,
-							"Connection Error", // Zmieniono "Błąd połączenia" na angielską wersję
+							"Błąd połączenia",
 							fmt.Sprintf("Failed to connect: %v", err),
 							50,
 							7,
 							v.width,
 							v.height,
 						)
-						v.connecting = false // Dodano reset flagi connecting
 						return v, nil
 					}
 
@@ -182,7 +182,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Teraz kończymy pętlę TUI, aby main.go mogło wykonać ConfigureTerminal() i StartShell()
 					return v, tea.Quit
 				}
-
 			case "n", "N":
 				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
 					v.waitingForKeyConfirmation = false
@@ -195,7 +194,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						v.width,
 						v.height,
 					)
-					v.connecting = false // Dodano reset flagi connecting
 					return v, nil
 				}
 			}
@@ -385,6 +383,7 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 			if keyIndex >= len(keys) {
 				return errMsg("Invalid key ID")
 			}
+
 			key := keys[keyIndex]
 			keyPath, err := key.GetKeyPath()
 			if err != nil {
@@ -397,6 +396,7 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 			if host.PasswordID >= len(passwords) {
 				return errMsg("Invalid password ID")
 			}
+
 			password := passwords[host.PasswordID]
 			decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
 			if err != nil {
@@ -405,23 +405,47 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 			authData = decryptedPass
 		}
 
-		// Najpierw pobieramy fingerprint
-		fingerprint, err := ssh.GetHostKeyFingerprint(&host)
-		if err != nil {
-			return errMsg(fmt.Sprintf("Cannot retrieve key fingerprint: %v", err))
-		}
+		// Utworzenie klienta SSH
+		sshClient := ssh.NewSSHClient(v.model.GetPasswords())
 
-		// Ustawiamy stan oczekiwania na potwierdzenie klucza
-		v.waitingForKeyConfirmation = true
-		v.hostKeyFingerprint = fingerprint
-		v.pendingConnection.host = &host
-		v.pendingConnection.password = authData
+		// Kanał do obsługi timeoutu połączenia
+		connectionDone := make(chan error, 1)
+		go func() {
+			connectionDone <- sshClient.Connect(&host, authData)
+		}()
 
-		// Zwracamy komunikat do wyświetlenia popupu
-		return hostKeyVerificationMsg{
-			IP:          host.IP,
-			Port:        host.Port,
-			Fingerprint: fingerprint,
+		// Czekamy na połączenie z timeoutem
+		select {
+		case err := <-connectionDone:
+			if err != nil {
+				// Sprawdzamy czy to błąd weryfikacji klucza
+				if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
+					fingerprint, err := ssh.GetHostKeyFingerprint(&host)
+					if err != nil {
+						return errMsg(fmt.Sprintf("Cannot retrieve key fingerprint: %v", err))
+					}
+
+					// Ustawiamy stan oczekiwania na potwierdzenie klucza
+					v.waitingForKeyConfirmation = true
+					v.hostKeyFingerprint = fingerprint
+					v.pendingConnection.host = &host
+					v.pendingConnection.password = authData
+
+					return hostKeyVerificationMsg{
+						IP:          verificationRequired.IP,
+						Port:        verificationRequired.Port,
+						Fingerprint: fingerprint,
+					}
+				}
+				return errMsg(fmt.Sprintf("Failed to connect: %v", err))
+			}
+
+			// Połączenie udane
+			v.model.SetSSHClient(sshClient)
+			return connectSuccessMsg{}
+
+		case <-time.After(10 * time.Second):
+			return errMsg("Connection timed out")
 		}
 	}
 }
