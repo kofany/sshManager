@@ -17,3 +17,4 @@ type HostKeyResponseMsg bool
 type ReloadAppMsg struct{}
 type ShellExitedMsg struct{}
 type SessionEndedMsg struct{}
+type AutoCloseMsg struct{}

@@ -39,8 +39,9 @@ type mainView struct {
 		host     *models.Host
 		password string
 	}
-	popup *components.Popup // Dodane nowe pole
-
+	popup          *components.Popup // Dodane nowe pole
+	autoCloseTimer *time.Timer
+	stopChan       chan struct{}
 }
 
 type connectError string
@@ -134,6 +135,16 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.ReloadAppMsg:
 		v.model.SetQuitting(true)
 		return v, tea.Quit
+
+	case messages.AutoCloseMsg:
+		if v.popup != nil && v.popup.Type == components.PopupSessionEnded {
+			v.popup = nil
+			if v.autoCloseTimer != nil {
+				v.autoCloseTimer.Stop()
+				v.autoCloseTimer = nil
+			}
+			return v, v.PostInitialize()
+		}
 
 	case tea.KeyMsg:
 		// Obsługa klawiszy dla popupu
@@ -822,12 +833,41 @@ func (v *mainView) PostInitialize() tea.Cmd {
 
 func (v *mainView) ShowSessionEndedPopup() {
 	v.popup = components.NewPopup(
-		components.PopupSessionEnded, // Dodamy nowy typ popupu
+		components.PopupSessionEnded,
 		"SSH Session Ended",
-		"SSH session has been terminated successfully.\nPress ESC or ENTER to continue.",
+		"SSH session has been terminated successfully.\nAuto-closing in 3 seconds...",
 		50,
 		7,
 		v.width,
 		v.height,
 	)
+
+	// Upewnij się, że poprzedni timer został zatrzymany i wyczyszczony
+	if v.autoCloseTimer != nil {
+		v.autoCloseTimer.Stop()
+		v.autoCloseTimer = nil
+	}
+
+	// Ustawiamy nowy timer na 3 sekundy
+	v.autoCloseTimer = time.NewTimer(3 * time.Second)
+
+	// Uruchamiamy goroutine do obsługi timera
+	go func() {
+		defer func() {
+			// Cleanup timera w przypadku paniki
+			if v.autoCloseTimer != nil {
+				v.autoCloseTimer.Stop()
+				v.autoCloseTimer = nil
+			}
+		}()
+
+		select {
+		case <-v.autoCloseTimer.C:
+			if v.model != nil && v.model.Program != nil {
+				v.model.Program.Send(messages.AutoCloseMsg{})
+			}
+		case <-v.stopChan: // Dodaj pole stopChan do struktury mainView jeśli nie istnieje
+			return
+		}
+	}()
 }
