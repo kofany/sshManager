@@ -144,7 +144,11 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					v.popup = nil
 					return v, nil
 				}
-				// w main_view.go
+				if v.popup.Type == components.PopupSessionEnded {
+					v.popup = nil
+					// Resetujemy stan wejścia
+					return v, v.PostInitialize()
+				}
 
 			case "y", "Y":
 				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
@@ -803,17 +807,27 @@ func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	)
 }
 
-// W main_view.go
 func (v *mainView) PostInitialize() tea.Cmd {
 	return tea.Sequence(
 		tea.ClearScreen,
 		tea.EnterAltScreen,
 		func() tea.Msg {
-			// Symulujemy "bezpieczny" klawisz
 			return tea.KeyMsg{
 				Type:  tea.KeyRunes,
 				Runes: []rune{'i'},
 			}
 		},
+	)
+}
+
+func (v *mainView) ShowSessionEndedPopup() {
+	v.popup = components.NewPopup(
+		components.PopupSessionEnded, // Dodamy nowy typ popupu
+		"SSH Session Ended",
+		"SSH session has been terminated successfully.\nPress ESC or ENTER to continue.",
+		50,
+		7,
+		v.width,
+		v.height,
 	)
 }

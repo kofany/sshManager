@@ -17,7 +17,8 @@ const (
 	PopupDelete
 	PopupHostKey
 	PopupMessage
-	PopupKeyEdit // Nowy typ
+	PopupKeyEdit      // Nowy typ
+	PopupSessionEnded // Nowy typ
 
 )
 

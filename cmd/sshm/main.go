@@ -213,15 +213,12 @@ func main() {
 	var p *tea.Program
 
 	for {
-		// Tworzenie nowej instancji programu jeśli nie mamy aktywnej
-		if p == nil {
-			p = tea.NewProgram(m, tea.WithAltScreen())
-			m.SetProgram(p)
-		}
+		// Tworzenie nowej instancji programu
+		p = tea.NewProgram(m, tea.WithAltScreen())
+		m.SetProgram(p)
 
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
-				// Zwalniamy terminal przed SSH
 				if err := p.ReleaseTerminal(); err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
 					continue
@@ -245,11 +242,12 @@ func main() {
 				sshClient.Disconnect()
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
-				m.updateCurrentView()
 
-				// Kluczowa zmiana: Ustawiamy p na nil aby wymusić utworzenie
-				// nowej instancji programu w następnej iteracji
-				p = nil
+				// Tworzymy nowy widok główny z popupem
+				mainView := views.NewMainView(m.uiModel)
+				mainView.ShowSessionEndedPopup()
+				m.currentView = mainView
+
 				continue
 			}
 		}
@@ -268,9 +266,5 @@ func main() {
 		if m.quitting {
 			break
 		}
-
-		// Jeśli program się zakończył ale nie kończymy aplikacji,
-		// ustawiamy p na nil aby wymusić nową instancję
-		p = nil
 	}
 }
