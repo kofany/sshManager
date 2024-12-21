@@ -126,7 +126,22 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Upewniamy się, że terminal zostanie przywrócony
-	defer term.Restore(int(os.Stdin.Fd()), rawState)
+	defer func(raw *term.State) {
+		// Najpierw resetujemy stan wewnętrzny
+		s.setState(StateDisconnected)
+		if s.stopChan != nil {
+			close(s.stopChan)
+			s.stopChan = make(chan struct{})
+		}
+
+		// Resetujemy strumień wejściowy przed przywróceniem stanu
+		s.stdin.Sync()
+
+		// Przywracamy oryginalny stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to restore original terminal state: %v\n", err)
+		}
+	}(rawState)
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -137,7 +152,12 @@ func (s *SSHSession) StartShell() error {
 
 	// Czekanie na zakończenie sesji
 	if err := s.session.Wait(); err != nil {
-		if err.Error() != "Process exited with status 1" {
+		// Ignorujemy typowe kody wyjścia
+		errStr := err.Error()
+		if errStr != "Process exited with status 1" &&
+			!strings.Contains(errStr, "exit status") &&
+			!strings.Contains(errStr, "signal: terminated") &&
+			!strings.Contains(errStr, "signal: interrupt") {
 			return fmt.Errorf("session ended with error: %v", err)
 		}
 	}
