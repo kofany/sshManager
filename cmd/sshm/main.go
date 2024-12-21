@@ -253,6 +253,24 @@ func main() {
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
 				m.updateCurrentView()
+
+				// Zwalniamy terminal po sesji SSH
+				if err := p.ReleaseTerminal(); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to release terminal after SSH: %v\n", err)
+				}
+
+				// Tworzymy nowy program z tymi samymi opcjami
+				p = tea.NewProgram(m, tea.WithAltScreen())
+				m.SetProgram(p)
+
+				// Wymuszamy inicjalizację nowego widoku
+				if cmd := m.currentView.Init(); cmd != nil {
+					if err := cmd(); err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to initialize view: %v\n", err)
+					}
+				}
+
+				continue
 			}
 		}
 	}
