@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -302,4 +303,37 @@ func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
 	s.keepAlive = duration
+}
+
+func FlushStdin() error {
+	fd := int(os.Stdin.Fd())
+	// Ustaw non-blocking
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags|unix.O_NONBLOCK); err != nil {
+		return err
+	}
+
+	// Odczytaj i zignoruj wszystkie dane
+	buf := make([]byte, 1024)
+	for {
+		n, err := unix.Read(fd, buf)
+		if err != nil {
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				break
+			}
+			return err
+		}
+		if n == 0 {
+			break
+		}
+	}
+
+	// Przywróć flags
+	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags); err != nil {
+		return err
+	}
+	return nil
 }

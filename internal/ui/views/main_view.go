@@ -822,10 +822,11 @@ func (v *mainView) PostInitialize() tea.Cmd {
 	return tea.Sequence(
 		tea.ClearScreen,
 		tea.EnterAltScreen,
+
 		func() tea.Msg {
-			return tea.KeyMsg{
-				Type:  tea.KeyRunes,
-				Runes: []rune{'i'},
+			return tea.WindowSizeMsg{
+				Width:  v.width,
+				Height: v.height,
 			}
 		},
 	)

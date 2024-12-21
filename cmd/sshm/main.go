@@ -6,15 +6,23 @@ import (
 	"path/filepath"
 	"sshManager/internal/config"
 	"sshManager/internal/crypto"
+	"sshManager/internal/ssh"
 	"sshManager/internal/sync"
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 )
+
+// resetTerminal wysyła sekwencję resetującą terminal
+func resetTerminal() {
+	fmt.Print("\033c")
+	time.Sleep(100 * time.Millisecond) // Opcjonalne opóźnienie
+}
 
 type programModel struct {
 	quitting    bool
@@ -213,6 +221,14 @@ func main() {
 	var p *tea.Program
 
 	for {
+		// Reset terminal
+		resetTerminal()
+
+		// Flush stdin
+		if err := ssh.FlushStdin(); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to flush stdin: %v\n", err)
+		}
+
 		// Tworzenie nowej instancji programu
 		p = tea.NewProgram(m, tea.WithAltScreen())
 		m.SetProgram(p)
@@ -242,6 +258,12 @@ func main() {
 				sshClient.Disconnect()
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
+
+				// Reset terminal and flush stdin again
+				resetTerminal()
+				if err := ssh.FlushStdin(); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to flush stdin after SSH: %v\n", err)
+				}
 
 				// Tworzymy nowy widok główny z popupem
 				mainView := views.NewMainView(m.uiModel)

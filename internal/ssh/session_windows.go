@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/windows"
 	"golang.org/x/term"
 )
 
@@ -309,4 +310,42 @@ func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
 	s.keepAlive = duration
+}
+
+func FlushStdin() error {
+	handle := windows.Handle(os.Stdin.Fd())
+	var mode uint32
+	err := windows.GetConsoleMode(handle, &mode)
+	if err != nil {
+		return err
+	}
+
+	// Ustaw tryb nieblokujący
+	err = windows.SetConsoleMode(handle, mode&^windows.ENABLE_LINE_INPUT&^windows.ENABLE_ECHO_INPUT)
+	if err != nil {
+		return err
+	}
+
+	// Odczytaj i zignoruj dane
+	buf := make([]uint16, 1024)
+	for {
+		var read uint32
+		err := windows.ReadConsole(handle, &buf[0], 1024, &read, nil)
+		if err != nil {
+			if err == windows.ERROR_INVALID_HANDLE {
+				break
+			}
+			return err
+		}
+		if read == 0 {
+			break
+		}
+	}
+
+	// Przywróć tryb
+	err = windows.SetConsoleMode(handle, mode)
+	if err != nil {
+		return err
+	}
+	return nil
 }
