@@ -78,6 +78,10 @@ func (v *mainView) Init() tea.Cmd {
 	return tea.Sequence(
 		tea.EnterAltScreen,
 		tea.ClearScreen,
+		func() tea.Msg {
+			// Wymuszamy reset stanu klawiatury
+			return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}}
+		},
 	)
 }
 
@@ -442,9 +446,20 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 
 			// Połączenie udane
 			v.model.SetSSHClient(sshClient)
-			return connectSuccessMsg{}
 
-		case <-time.After(10 * time.Second):
+			// Zwracamy sekwencję komend
+			return tea.Sequence(
+				// Najpierw symulujemy klawisz dla zresetowania stanu wejścia
+				func() tea.Msg {
+					return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}}
+				},
+				// Następnie informujemy o udanym połączeniu
+				func() tea.Msg {
+					return connectSuccessMsg{}
+				},
+			)()
+
+		case <-time.After(7 * time.Second):
 			return errMsg("Connection timed out")
 		}
 	}
@@ -776,6 +791,19 @@ func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	return v, tea.Sequence(
 		func() tea.Msg {
 			return messages.ReloadAppMsg{}
+		},
+	)
+}
+
+func (v *mainView) PostInitialize() tea.Cmd {
+	return tea.Sequence(
+		tea.ClearScreen,
+		func() tea.Msg {
+			// Symulujemy "bezpieczny" klawisz
+			return tea.KeyMsg{
+				Type:  tea.KeyRunes,
+				Runes: []rune{'i'},
+			}
 		},
 	)
 }
