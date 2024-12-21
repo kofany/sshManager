@@ -233,8 +233,6 @@ func main() {
 			break
 		}
 
-		// Jeśli mamy aktywne połączenie SSH
-		// Jeśli mamy aktywne połączenie SSH
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
 				// Zwalniamy terminal przed rozpoczęciem sesji SSH
@@ -253,11 +251,17 @@ func main() {
 				// Czyszczenie po sesji SSH
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
-				m.updateCurrentView()
+				mainView := views.NewMainView(m.uiModel)
+				m.currentView = mainView
 
-				// Tworzymy nowy program
+				// Tworzymy nowy program z wymuszonym resetem wejścia
 				p = tea.NewProgram(m, tea.WithAltScreen())
 				m.SetProgram(p)
+
+				// Wymuszamy reinicjalizację wejścia
+				if cmd := mainView.ReinitializeInput(); cmd != nil {
+					_ = cmd()
+				}
 
 				continue
 			}

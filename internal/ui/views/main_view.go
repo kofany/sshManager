@@ -693,6 +693,17 @@ func (v *mainView) renderStatusBar() string {
 	return framed
 }
 
+func (v *mainView) ReinitializeInput() tea.Cmd {
+	return tea.Sequence(
+		tea.ClearScreen,
+		tea.EnterAltScreen,
+		// Wymuszamy reset stanu wejścia
+		func() tea.Msg {
+			return tea.KeyMsg{Type: tea.KeyRunes, Runes: nil}
+		},
+	)
+}
+
 func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
