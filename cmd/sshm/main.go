@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sshManager/internal/config"
 	"sshManager/internal/crypto"
-	"sshManager/internal/ssh"
 	"sshManager/internal/sync"
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/messages"
@@ -221,14 +220,6 @@ func main() {
 	var p *tea.Program
 
 	for {
-		// Reset terminal
-		resetTerminal()
-
-		// Flush stdin
-		if err := ssh.FlushStdin(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to flush stdin: %v\n", err)
-		}
-
 		// Tworzenie nowej instancji programu
 		p = tea.NewProgram(m, tea.WithAltScreen())
 		m.SetProgram(p)
@@ -259,11 +250,8 @@ func main() {
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
 
-				// Reset terminal and flush stdin again
+				// Resetowanie terminala do domyślnych ustawień
 				resetTerminal()
-				if err := ssh.FlushStdin(); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to flush stdin after SSH: %v\n", err)
-				}
 
 				// Tworzymy nowy widok główny z popupem
 				mainView := views.NewMainView(m.uiModel)
