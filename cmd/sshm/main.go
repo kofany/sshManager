@@ -11,7 +11,6 @@ import (
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -235,13 +234,14 @@ func main() {
 		}
 
 		// Jeśli mamy aktywne połączenie SSH
+		// Jeśli mamy aktywne połączenie SSH
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
-				// Najpierw zwalniamy terminal
-				p.ReleaseTerminal()
-
-				// Czyścimy ekran przed sesją
-				fmt.Print("\033[H\033[2J")
+				// Zwalniamy terminal przed rozpoczęciem sesji SSH
+				if err := p.ReleaseTerminal(); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
+					continue
+				}
 
 				// Konfigurujemy i uruchamiamy sesję SSH
 				if err := session.ConfigureTerminal("xterm-256color"); err != nil {
@@ -250,31 +250,14 @@ func main() {
 					fmt.Fprintf(os.Stderr, "Shell error: %v\n", err)
 				}
 
-				// Dajemy czas na zakończenie wszystkich operacji
-				time.Sleep(100 * time.Millisecond)
-
 				// Czyszczenie po sesji SSH
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
 				m.updateCurrentView()
 
-				// Przygotowanie nowego programu
-				p = tea.NewProgram(m,
-					tea.WithAltScreen(),
-					tea.WithMouseCellMotion(),
-				)
+				// Tworzymy nowy program
+				p = tea.NewProgram(m, tea.WithAltScreen())
 				m.SetProgram(p)
-
-				// Wysyłamy sygnał o zakończeniu sesji
-				p.Send(messages.SessionEndedMsg{})
-
-				// Inicjalizacja widoku z małym opóźnieniem
-				go func() {
-					time.Sleep(50 * time.Millisecond)
-					if cmd := m.currentView.Init(); cmd != nil {
-						_ = cmd()
-					}
-				}()
 
 				continue
 			}
