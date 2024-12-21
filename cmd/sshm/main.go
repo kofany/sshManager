@@ -11,7 +11,6 @@ import (
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -212,16 +211,21 @@ func (m *programModel) View() string {
 func main() {
 	m := initialModel()
 	var p *tea.Program
+	var savedProgram *tea.Program // Dodajemy zmienną do przechowywania programu
 
 	for {
-		// Tworzymy nowy program z odpowiednimi opcjami
-		p = tea.NewProgram(m, tea.WithAltScreen())
-		m.SetProgram(p)
+		// Jeśli mamy zapisany program, używamy go, w przeciwnym razie tworzymy nowy
+		if savedProgram != nil {
+			p = savedProgram
+			savedProgram = nil
+		} else {
+			p = tea.NewProgram(m, tea.WithAltScreen())
+			m.SetProgram(p)
+		}
 
 		// Uruchamiamy program
 		model, err := p.Run()
 		if err != nil {
-			// Sprawdzamy specyficzne błędy, które możemy zignorować
 			if !strings.Contains(err.Error(), "program was killed") &&
 				!strings.Contains(err.Error(), "context canceled") {
 				fmt.Printf("Error running program: %v\n", err)
@@ -234,14 +238,11 @@ func main() {
 			break
 		}
 
+		// Jeśli mamy aktywne połączenie SSH
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
-				// Zapisujemy aktualny stan terminala przed SSH
-				oldState, err := term.GetState(int(os.Stdin.Fd()))
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to get terminal state: %v\n", err)
-					continue
-				}
+				// Zapisujemy aktualny program przed zwolnieniem terminala
+				savedProgram = p
 
 				// Zwalniamy terminal przed rozpoczęciem sesji SSH
 				if err := p.ReleaseTerminal(); err != nil {
@@ -260,22 +261,6 @@ func main() {
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
 				m.updateCurrentView()
-
-				// Jawnie przywracamy poprzedni stan terminala
-				if err := term.Restore(int(os.Stdin.Fd()), oldState); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
-				}
-
-				// Dajemy czas na ustabilizowanie stanu terminala
-				time.Sleep(50 * time.Millisecond)
-
-				// Tworzymy nowy program z wymuszoną reinicjalizacją terminala
-				p = tea.NewProgram(m,
-					tea.WithAltScreen(),
-					tea.WithInput(os.Stdin),
-					tea.WithOutput(os.Stdout),
-				)
-				m.SetProgram(p)
 
 				continue
 			}
