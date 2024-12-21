@@ -127,12 +127,14 @@ func (s *SSHSession) StartShell() error {
 
 	// Upewniamy się, że terminal zostanie przywrócony
 	defer func(raw *term.State) {
-		// Przywracamy stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), raw); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
-		}
-		// Resetujemy stan wewnętrzny
-		s.setState(StateDisconnected)
+		// Najpierw przywracamy oryginalny stan
+		term.Restore(int(os.Stdin.Fd()), s.originalTermState)
+
+		// Krótka pauza
+		time.Sleep(50 * time.Millisecond)
+
+		// Jeszcze raz przywracamy raw stan
+		term.Restore(int(os.Stdin.Fd()), raw)
 	}(rawState)
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {

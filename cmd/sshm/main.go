@@ -11,6 +11,7 @@ import (
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -235,6 +236,13 @@ func main() {
 
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
+				// Zapisujemy aktualny stan terminala przed SSH
+				oldState, err := term.GetState(int(os.Stdin.Fd()))
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to get terminal state: %v\n", err)
+					continue
+				}
+
 				// Zwalniamy terminal przed rozpoczęciem sesji SSH
 				if err := p.ReleaseTerminal(); err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
@@ -251,17 +259,23 @@ func main() {
 				// Czyszczenie po sesji SSH
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
-				mainView := views.NewMainView(m.uiModel)
-				m.currentView = mainView
+				m.updateCurrentView()
 
-				// Tworzymy nowy program z wymuszonym resetem wejścia
-				p = tea.NewProgram(m, tea.WithAltScreen())
-				m.SetProgram(p)
-
-				// Wymuszamy reinicjalizację wejścia
-				if cmd := mainView.ReinitializeInput(); cmd != nil {
-					_ = cmd()
+				// Jawnie przywracamy poprzedni stan terminala
+				if err := term.Restore(int(os.Stdin.Fd()), oldState); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
 				}
+
+				// Dajemy czas na ustabilizowanie stanu terminala
+				time.Sleep(50 * time.Millisecond)
+
+				// Tworzymy nowy program z wymuszoną reinicjalizacją terminala
+				p = tea.NewProgram(m,
+					tea.WithAltScreen(),
+					tea.WithInput(os.Stdin),
+					tea.WithOutput(os.Stdout),
+				)
+				m.SetProgram(p)
 
 				continue
 			}
