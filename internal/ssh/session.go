@@ -127,31 +127,13 @@ func (s *SSHSession) StartShell() error {
 
 	// Upewniamy się, że terminal zostanie przywrócony
 	defer func(raw *term.State) {
-		// Najpierw czyścimy stan wewnętrzny
+		// Przywracamy stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), raw); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
+		}
+		// Resetujemy stan wewnętrzny
 		s.setState(StateDisconnected)
-		if s.stopChan != nil {
-			close(s.stopChan)
-			s.stopChan = make(chan struct{})
-		}
-
-		// Czekamy moment na zakończenie wszystkich operacji
-		time.Sleep(50 * time.Millisecond)
-
-		// Przywracamy oryginalny stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore original terminal state: %v\n", err)
-		}
-
-		// Czekamy kolejny moment
-		time.Sleep(50 * time.Millisecond)
-
-		// Synchronizacja strumienia wejściowego
-		s.stdin.Sync()
-
-		// Jeszcze raz przywracamy stan dla pewności
-		term.Restore(int(os.Stdin.Fd()), raw)
 	}(rawState)
-
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
 		return fmt.Errorf("failed to start shell: %v", err)
