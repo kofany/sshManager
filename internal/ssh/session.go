@@ -97,7 +97,6 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	return nil
 }
 
-// StartShell uruchamia powłokę interaktywną
 func (s *SSHSession) StartShell() error {
 	// Konfiguracja strumieni we/wy
 	s.session.Stdin = s.stdin
@@ -125,16 +124,22 @@ func (s *SSHSession) StartShell() error {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
 
-	// Upewniamy się, że terminal zostanie przywrócony
-	defer func(raw *term.State) {
-		// Najpierw resetujemy stan sesji
+	cleanup := func() {
+		// Zatrzymujemy keepalive i sygnały
+		close(s.stopChan)
+
+		// Resetujemy stan sesji
 		s.setState(StateDisconnected)
 
+		// Małe opóźnienie przed przywróceniem stanu
+		time.Sleep(100 * time.Millisecond)
+
 		// Przywracamy stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), raw); err != nil {
+		if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
 		}
-	}(rawState)
+	}
+	defer cleanup()
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -145,7 +150,6 @@ func (s *SSHSession) StartShell() error {
 
 	// Czekanie na zakończenie sesji
 	if err := s.session.Wait(); err != nil {
-		// Ignorujemy typowe kody wyjścia
 		errStr := err.Error()
 		if errStr != "Process exited with status 1" &&
 			!strings.Contains(errStr, "exit status") &&
@@ -154,6 +158,9 @@ func (s *SSHSession) StartShell() error {
 			return fmt.Errorf("session ended with error: %v", err)
 		}
 	}
+
+	// Dodatkowe opóźnienie przed zakończeniem
+	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }

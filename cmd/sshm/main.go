@@ -11,6 +11,7 @@ import (
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -238,29 +239,58 @@ func main() {
 			break
 		}
 
-		// Jeśli mamy aktywne połączenie SSH
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
-				// Zapisujemy aktualny program przed zwolnieniem terminala
 				savedProgram = p
 
-				// Zwalniamy terminal przed rozpoczęciem sesji SSH
 				if err := p.ReleaseTerminal(); err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
 					continue
 				}
 
-				// Konfigurujemy i uruchamiamy sesję SSH
-				if err := session.ConfigureTerminal("xterm-256color"); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to configure terminal: %v\n", err)
-				} else if err := session.StartShell(); err != nil {
-					fmt.Fprintf(os.Stderr, "Shell error: %v\n", err)
+				// Dodajemy kanał do synchronizacji
+				sessionDone := make(chan error)
+				sessionClosed := make(chan struct{})
+
+				go func() {
+					defer close(sessionDone)
+
+					if err := session.ConfigureTerminal("xterm-256color"); err != nil {
+						sessionDone <- fmt.Errorf("failed to configure terminal: %v", err)
+						return
+					}
+
+					err := session.StartShell()
+					sessionDone <- err
+
+					// Sygnalizujemy zamknięcie sesji
+					close(sessionClosed)
+				}()
+
+				// Czekamy na zakończenie sesji i błędy - uproszczona wersja
+				if err := <-sessionDone; err != nil {
+					fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
 				}
 
-				// Czyszczenie po sesji SSH
+				// Czekamy na pełne zamknięcie sesji
+				<-sessionClosed
+
+				// Upewniamy się, że sesja jest zamknięta
+				sshClient.Disconnect()
+
+				// Opóźnienie przed przywróceniem TUI
+				time.Sleep(200 * time.Millisecond)
+
+				// Przywracamy terminal i TUI
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
 				m.updateCurrentView()
+
+				// Wymuszamy reset stanu wejścia
+				if view, ok := m.currentView.(interface{ PostInitialize() tea.Cmd }); ok {
+					cmd := view.PostInitialize()
+					m.currentView, _ = m.currentView.Update(cmd())
+				}
 
 				continue
 			}

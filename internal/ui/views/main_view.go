@@ -708,13 +708,21 @@ func (v *mainView) renderStatusBar() string {
 	return framed
 }
 
+// W main_view.go
 func (v *mainView) ReinitializeInput() tea.Cmd {
 	return tea.Sequence(
 		tea.ClearScreen,
 		tea.EnterAltScreen,
-		// Wymuszamy reset stanu wejścia
 		func() tea.Msg {
-			return tea.KeyMsg{Type: tea.KeyRunes, Runes: nil}
+			// Symulujemy serię "bezpiecznych" klawiszy
+			return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}}
+		},
+		// Wymuszamy aktualizację stanu terminala
+		func() tea.Msg {
+			return tea.WindowSizeMsg{
+				Width:  v.width,
+				Height: v.height,
+			}
 		},
 	)
 }
@@ -795,9 +803,11 @@ func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	)
 }
 
+// W main_view.go
 func (v *mainView) PostInitialize() tea.Cmd {
 	return tea.Sequence(
 		tea.ClearScreen,
+		tea.EnterAltScreen,
 		func() tea.Msg {
 			// Symulujemy "bezpieczny" klawisz
 			return tea.KeyMsg{
