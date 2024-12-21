@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sshManager/internal/config"
 	"sshManager/internal/crypto"
 	"sshManager/internal/sync"
@@ -11,6 +12,7 @@ import (
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -254,20 +256,25 @@ func main() {
 				m.uiModel.SetActiveView(ui.ViewMain)
 				m.updateCurrentView()
 
-				// Zwalniamy terminal po sesji SSH
-				if err := p.ReleaseTerminal(); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to release terminal after SSH: %v\n", err)
+				// Czyszczenie ekranu i reinicjalizacja terminala
+				if runtime.GOOS == "windows" {
+					fmt.Print("\033[H\033[2J")        // Czyści ekran
+					fmt.Print("\033[H")               // Ustawia kursor na początku
+					time.Sleep(50 * time.Millisecond) // Dajemy czas na przetworzenie
 				}
 
 				// Tworzymy nowy program z tymi samymi opcjami
-				p = tea.NewProgram(m, tea.WithAltScreen())
+				p = tea.NewProgram(m,
+					tea.WithAltScreen(),
+					tea.WithMouseCellMotion(),
+				)
 				m.SetProgram(p)
 
-				// Wymuszamy inicjalizację nowego widoku
+				// Dajemy czas na inicjalizację
+				time.Sleep(50 * time.Millisecond)
+
 				if cmd := m.currentView.Init(); cmd != nil {
-					if err := cmd(); err != nil {
-						fmt.Fprintf(os.Stderr, "Failed to initialize view: %v\n", err)
-					}
+					_ = cmd() // Ignorujemy błąd inicjalizacji, który jest normalny w tym kontekście
 				}
 
 				continue

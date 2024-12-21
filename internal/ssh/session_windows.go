@@ -126,27 +126,31 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Upewniamy się, że terminal zostanie przywrócony
-	defer func() {
-		// Najpierw przywracamy oryginalny stan
+	defer func(raw *term.State) {
+		// Przywracamy stan raw
+		if err := term.Restore(int(os.Stdin.Fd()), raw); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to restore raw terminal state: %v\n", err)
+		}
+
+		// Przywracamy oryginalny stan
 		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to restore original terminal state: %v\n", err)
 		}
 
-		// Następnie przywracamy stan raw (dla pewności)
-		if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore raw terminal state: %v\n", err)
-		}
+		// Czyszczenie ekranu i ustawienie kursora
+		fmt.Print("\033[H\033[2J") // Czyści ekran
+		fmt.Print("\033[H")        // Ustawia kursor na początku
 
-		// Wymuszamy synchronizację strumienia wejściowego
+		// Resetujemy strumień wejściowy
 		s.stdin.Sync()
 
 		// Resetujemy stan wewnętrzny
 		s.setState(StateDisconnected)
-		close(s.stopChan)
-
-		// Tworzymy nowy kanał stop dla kolejnej sesji
-		s.stopChan = make(chan struct{})
-	}()
+		if s.stopChan != nil {
+			close(s.stopChan)
+			s.stopChan = make(chan struct{})
+		}
+	}(rawState)
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -166,6 +170,9 @@ func (s *SSHSession) StartShell() error {
 			return fmt.Errorf("session ended with error: %v", err)
 		}
 	}
+
+	// Dodajemy małe opóźnienie przed zamknięciem
+	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }
