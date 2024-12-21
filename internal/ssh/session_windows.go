@@ -97,7 +97,6 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	return nil
 }
 
-// StartShell uruchamia powłokę interaktywną
 func (s *SSHSession) StartShell() error {
 	// Konfiguracja strumieni we/wy
 	s.session.Stdin = s.stdin
@@ -127,28 +126,19 @@ func (s *SSHSession) StartShell() error {
 
 	// Upewniamy się, że terminal zostanie przywrócony
 	defer func(raw *term.State) {
-		// Przywracamy stan raw
-		if err := term.Restore(int(os.Stdin.Fd()), raw); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore raw terminal state: %v\n", err)
-		}
-
-		// Przywracamy oryginalny stan
-		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore original terminal state: %v\n", err)
-		}
-
-		// Czyszczenie ekranu i ustawienie kursora
-		fmt.Print("\033[H\033[2J") // Czyści ekran
-		fmt.Print("\033[H")        // Ustawia kursor na początku
-
-		// Resetujemy strumień wejściowy
-		s.stdin.Sync()
-
-		// Resetujemy stan wewnętrzny
+		// Najpierw resetujemy stan wewnętrzny
 		s.setState(StateDisconnected)
 		if s.stopChan != nil {
 			close(s.stopChan)
 			s.stopChan = make(chan struct{})
+		}
+
+		// Resetujemy strumień wejściowy przed przywróceniem stanu
+		s.stdin.Sync()
+
+		// Przywracamy oryginalny stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to restore original terminal state: %v\n", err)
 		}
 	}(rawState)
 
@@ -170,9 +160,6 @@ func (s *SSHSession) StartShell() error {
 			return fmt.Errorf("session ended with error: %v", err)
 		}
 	}
-
-	// Dodajemy małe opóźnienie przed zamknięciem
-	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }
