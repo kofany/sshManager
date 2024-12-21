@@ -11,7 +11,6 @@ import (
 	"sshManager/internal/ui/messages"
 	"sshManager/internal/ui/views"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -212,19 +211,50 @@ func (m *programModel) View() string {
 func main() {
 	m := initialModel()
 	var p *tea.Program
-	var savedProgram *tea.Program // Dodajemy zmienną do przechowywania programu
 
 	for {
-		// Jeśli mamy zapisany program, używamy go, w przeciwnym razie tworzymy nowy
-		if savedProgram != nil {
-			p = savedProgram
-			savedProgram = nil
-		} else {
+		// Tworzenie nowej instancji programu jeśli nie mamy aktywnej
+		if p == nil {
 			p = tea.NewProgram(m, tea.WithAltScreen())
 			m.SetProgram(p)
 		}
 
-		// Uruchamiamy program
+		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
+			if session := sshClient.Session(); session != nil {
+				// Zwalniamy terminal przed SSH
+				if err := p.ReleaseTerminal(); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
+					continue
+				}
+
+				// Sesja SSH
+				sessionDone := make(chan error)
+				go func() {
+					if err := session.ConfigureTerminal("xterm-256color"); err != nil {
+						sessionDone <- fmt.Errorf("failed to configure terminal: %v", err)
+						return
+					}
+					sessionDone <- session.StartShell()
+				}()
+
+				if err := <-sessionDone; err != nil {
+					fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
+				}
+
+				// Zamykamy sesję
+				sshClient.Disconnect()
+				m.uiModel.SetSSHClient(nil)
+				m.uiModel.SetActiveView(ui.ViewMain)
+				m.updateCurrentView()
+
+				// Kluczowa zmiana: Ustawiamy p na nil aby wymusić utworzenie
+				// nowej instancji programu w następnej iteracji
+				p = nil
+				continue
+			}
+		}
+
+		// Normalne uruchomienie programu
 		model, err := p.Run()
 		if err != nil {
 			if !strings.Contains(err.Error(), "program was killed") &&
@@ -239,61 +269,8 @@ func main() {
 			break
 		}
 
-		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
-			if session := sshClient.Session(); session != nil {
-				savedProgram = p
-
-				if err := p.ReleaseTerminal(); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
-					continue
-				}
-
-				// Dodajemy kanał do synchronizacji
-				sessionDone := make(chan error)
-				sessionClosed := make(chan struct{})
-
-				go func() {
-					defer close(sessionDone)
-
-					if err := session.ConfigureTerminal("xterm-256color"); err != nil {
-						sessionDone <- fmt.Errorf("failed to configure terminal: %v", err)
-						return
-					}
-
-					err := session.StartShell()
-					sessionDone <- err
-
-					// Sygnalizujemy zamknięcie sesji
-					close(sessionClosed)
-				}()
-
-				// Czekamy na zakończenie sesji i błędy - uproszczona wersja
-				if err := <-sessionDone; err != nil {
-					fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
-				}
-
-				// Czekamy na pełne zamknięcie sesji
-				<-sessionClosed
-
-				// Upewniamy się, że sesja jest zamknięta
-				sshClient.Disconnect()
-
-				// Opóźnienie przed przywróceniem TUI
-				time.Sleep(200 * time.Millisecond)
-
-				// Przywracamy terminal i TUI
-				m.uiModel.SetSSHClient(nil)
-				m.uiModel.SetActiveView(ui.ViewMain)
-				m.updateCurrentView()
-
-				// Wymuszamy reset stanu wejścia
-				if view, ok := m.currentView.(interface{ PostInitialize() tea.Cmd }); ok {
-					cmd := view.PostInitialize()
-					m.currentView, _ = m.currentView.Update(cmd())
-				}
-
-				continue
-			}
-		}
+		// Jeśli program się zakończył ale nie kończymy aplikacji,
+		// ustawiamy p na nil aby wymusić nową instancję
+		p = nil
 	}
 }
