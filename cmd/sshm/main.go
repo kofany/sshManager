@@ -256,10 +256,13 @@ func main() {
 
 				// Tworzymy nowy program z tymi samymi opcjami
 				p = tea.NewProgram(m,
-					tea.WithAltScreen(), // Wymusza użycie alternatywnego ekranu
+					tea.WithAltScreen(),
 					tea.WithMouseCellMotion(),
 				)
 				m.SetProgram(p)
+
+				// Wysyłamy dedykowany komunikat o zakończeniu sesji
+				p.Send(messages.SessionEndedMsg{})
 
 				// Inicjalizacja widoku
 				if cmd := m.currentView.Init(); cmd != nil {
