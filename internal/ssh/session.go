@@ -1,7 +1,7 @@
+// internal/ssh/session.go
 //go:build !windows
 // +build !windows
 
-// internal/ssh/session.go
 package ssh
 
 import (
@@ -120,22 +120,22 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Przejście w tryb raw dla terminala
-	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	_, err = term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
 
 	// Upewniamy się, że terminal zostanie przywrócony
-	defer func(raw *term.State) {
-		// Najpierw przywracamy oryginalny stan
-		term.Restore(int(os.Stdin.Fd()), s.originalTermState)
+	defer func() {
+		// Przywracamy oryginalny stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
+		}
 
-		// Krótka pauza
+		// Krótka pauza, aby terminal się ustabilizował
 		time.Sleep(50 * time.Millisecond)
+	}()
 
-		// Jeszcze raz przywracamy raw stan
-		term.Restore(int(os.Stdin.Fd()), raw)
-	}(rawState)
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
 		return fmt.Errorf("failed to start shell: %v", err)
@@ -160,41 +160,22 @@ func (s *SSHSession) StartShell() error {
 
 // handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
-	sigChan := make(chan os.Signal, 5) // bufor na sygnały
+	sigChan := make(chan os.Signal, 1)
+	// macOS/Linux obsługuje więcej sygnałów, więc dodajemy SIGWINCH
 	signal.Notify(sigChan, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
-
-	// Kanał dla prób ponowienia
-	retryTicker := time.NewTicker(time.Second)
-	defer retryTicker.Stop()
-
-	var resizeError error
-	var needsResize bool
 
 	for {
 		select {
 		case sig := <-sigChan:
 			switch sig {
 			case syscall.SIGWINCH:
-				needsResize = true
 				if err := s.updateTerminalSize(); err != nil {
-					resizeError = err
-				} else {
-					resizeError = nil
-					needsResize = false
+					s.setError(fmt.Errorf("failed to update terminal size: %v", err))
 				}
 			case syscall.SIGTERM, syscall.SIGINT:
 				s.Close()
 				return
-			}
-		case <-retryTicker.C:
-			if needsResize && resizeError != nil {
-				if err := s.updateTerminalSize(); err != nil {
-					resizeError = err
-				} else {
-					resizeError = nil
-					needsResize = false
-				}
 			}
 		case <-s.stopChan:
 			return
@@ -248,7 +229,11 @@ func (s *SSHSession) keepAliveLoop() {
 
 // Close zamyka sesję
 func (s *SSHSession) Close() error {
-	if s.stopChan != nil {
+	// Zamknięcie kanału stopChan
+	select {
+	case <-s.stopChan:
+		// Kanał już zamknięty
+	default:
 		close(s.stopChan)
 	}
 

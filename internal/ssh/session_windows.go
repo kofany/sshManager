@@ -1,3 +1,4 @@
+// internal/ssh/session_windows.go
 //go:build windows
 // +build windows
 
@@ -41,7 +42,6 @@ type SSHSession struct {
 	stopChan          chan struct{}
 	stateMutex        sync.RWMutex
 	originalTermState *term.State // Dodane pole także dla Windows
-
 }
 
 // NewSSHSession tworzy nową sesję SSH
@@ -97,6 +97,7 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	return nil
 }
 
+// StartShell uruchamia powłokę interaktywną
 func (s *SSHSession) StartShell() error {
 	// Konfiguracja strumieni we/wy
 	s.session.Stdin = s.stdin
@@ -119,22 +120,21 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Przejście w tryb raw dla terminala
-	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	_, err = term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
 
 	// Upewniamy się, że terminal zostanie przywrócony
-	defer func(raw *term.State) {
-		// Najpierw przywracamy oryginalny stan
-		term.Restore(int(os.Stdin.Fd()), s.originalTermState)
+	defer func() {
+		// Przywracamy oryginalny stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
+		}
 
-		// Krótka pauza
+		// Krótka pauza, aby terminal się ustabilizował
 		time.Sleep(50 * time.Millisecond)
-
-		// Jeszcze raz przywracamy raw stan
-		term.Restore(int(os.Stdin.Fd()), raw)
-	}(rawState)
+	}()
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -158,6 +158,7 @@ func (s *SSHSession) StartShell() error {
 	return nil
 }
 
+// handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
 	// Windows obsługuje tylko SIGTERM i SIGINT
@@ -174,6 +175,12 @@ func (s *SSHSession) handleSignals() {
 
 		for {
 			select {
+			case sig := <-sigChan:
+				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
+					fmt.Println("Received signal, closing session")
+					s.Close()
+					return
+				}
 			case <-resizeTicker.C:
 				width, height, err := term.GetSize(int(os.Stdout.Fd()))
 				if err != nil {
@@ -190,12 +197,11 @@ func (s *SSHSession) handleSignals() {
 					s.stateMutex.Lock()
 					if err := s.session.WindowChange(height, width); err != nil {
 						s.setError(fmt.Errorf("failed to update window size: %v", err))
-						s.stateMutex.Unlock()
-						continue
+					} else {
+						s.termWidth = width
+						s.termHeight = height
+						lastWidth, lastHeight = width, height
 					}
-					s.termWidth = width
-					s.termHeight = height
-					lastWidth, lastHeight = width, height
 					s.stateMutex.Unlock()
 				}
 			case <-s.stopChan:
@@ -203,44 +209,6 @@ func (s *SSHSession) handleSignals() {
 			}
 		}
 	}()
-
-	// Główna pętla obsługi sygnałów
-	for {
-		select {
-		case sig := <-sigChan:
-			if sig == syscall.SIGTERM || sig == syscall.SIGINT {
-				s.Close()
-				return
-			}
-		case <-s.stopChan:
-			return
-		}
-	}
-}
-
-// updateTerminalSize dla Windows - helper method
-func (s *SSHSession) updateTerminalSize() error {
-	width, height, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
-		return fmt.Errorf("failed to get terminal size: %v", err)
-	}
-
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-
-	// Sprawdź czy rozmiar rzeczywiście się zmienił
-	if width == s.termWidth && height == s.termHeight {
-		return nil
-	}
-
-	if err := s.session.WindowChange(height, width); err != nil {
-		return fmt.Errorf("failed to update window size: %v", err)
-	}
-
-	s.termWidth = width
-	s.termHeight = height
-
-	return nil
 }
 
 // keepAliveLoop wysyła pakiety keepalive
@@ -265,7 +233,11 @@ func (s *SSHSession) keepAliveLoop() {
 
 // Close zamyka sesję
 func (s *SSHSession) Close() error {
-	if s.stopChan != nil {
+	// Zamknięcie kanału stopChan
+	select {
+	case <-s.stopChan:
+		// Kanał już zamknięty
+	default:
 		close(s.stopChan)
 	}
 
