@@ -97,7 +97,6 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	return nil
 }
 
-// StartShell uruchamia powłokę interaktywną
 func (s *SSHSession) StartShell() error {
 	// Konfiguracja strumieni we/wy
 	s.session.Stdin = s.stdin
@@ -120,21 +119,21 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Przejście w tryb raw dla terminala
-	_, err = term.MakeRaw(int(os.Stdin.Fd()))
+	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
 
 	// Upewniamy się, że terminal zostanie przywrócony
-	defer func() {
-		// Przywracamy oryginalny stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), s.originalTermState); err != nil {
+	defer func(raw *term.State) {
+		// Najpierw resetujemy stan sesji
+		s.setState(StateDisconnected)
+
+		// Przywracamy stan terminala
+		if err := term.Restore(int(os.Stdin.Fd()), raw); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
 		}
-
-		// Krótka pauza, aby terminal się ustabilizował
-		time.Sleep(50 * time.Millisecond)
-	}()
+	}(rawState)
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
