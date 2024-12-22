@@ -17,9 +17,8 @@ const (
 	PopupDelete
 	PopupHostKey
 	PopupMessage
-	PopupKeyEdit      // Nowy typ
-	PopupSessionEnded // Nowy typ
-
+	PopupKeyEdit
+	PopupSessionEnded
 )
 
 type Popup struct {

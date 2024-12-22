@@ -14,6 +14,7 @@ import (
 
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
+	"sshManager/internal/utils"
 
 	scp "github.com/bramvdbogaerde/go-scp"
 	"github.com/pkg/sftp"
@@ -47,7 +48,14 @@ func NewFileTransfer(cipher *crypto.Cipher) *FileTransfer {
 	}
 }
 
-// Connect establishes an SSH, SCP, and SFTP connection
+// Connect establishes SSH, SCP, and SFTP connections to the remote host.
+// It handles both password and SSH key authentication methods.
+// The function is thread-safe and ensures only one active connection at a time.
+// Parameters:
+//   - host: The host configuration containing connection details
+//   - authData: Either the password or the path to the SSH key file
+//
+// Returns an error if any part of the connection process fails.
 func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -56,9 +64,10 @@ func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
 		return nil
 	}
 
+	// Setup authentication method based on host configuration
 	var authMethod ssh.AuthMethod
 	if host.PasswordID < 0 {
-		// Using SSH key authentication
+		// SSH key authentication
 		key, err := os.ReadFile(authData)
 		if err != nil {
 			return fmt.Errorf("failed to read SSH key: %v", err)
@@ -69,10 +78,11 @@ func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
 		}
 		authMethod = ssh.PublicKeys(signer)
 	} else {
-		// Using password authentication
+		// Password authentication
 		authMethod = ssh.Password(authData)
 	}
 
+	// Configure SSH client
 	config := &ssh.ClientConfig{
 		User:            host.Login,
 		Auth:            []ssh.AuthMethod{authMethod},
@@ -80,20 +90,21 @@ func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
 		Timeout:         30 * time.Second,
 	}
 
+	// Establish SSH connection
 	addr := fmt.Sprintf("%s:%s", host.IP, host.Port)
 	sshClient, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 
-	// Create SCP client using existing SSH connection
+	// Initialize SCP client
 	scpClient, err := scp.NewClientBySSH(sshClient)
 	if err != nil {
 		sshClient.Close()
 		return fmt.Errorf("failed to create SCP client: %v", err)
 	}
 
-	// Create SFTP client for directory operations
+	// Initialize SFTP client
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		scpClient.Close()
@@ -101,6 +112,7 @@ func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
 		return fmt.Errorf("failed to create SFTP client: %v", err)
 	}
 
+	// Store client instances
 	ft.sshClient = sshClient
 	ft.scpClient = scpClient
 	ft.sftpClient = sftpClient
@@ -110,17 +122,19 @@ func (ft *FileTransfer) Connect(host *models.Host, authData string) error {
 	return nil
 }
 
-// Disconnect closes the SCP, SFTP, and SSH connections
+// Disconnect closes all active connections (SCP, SFTP, and SSH) in a safe manner.
+// The function is thread-safe and collects all errors that occur during disconnection.
+// It ensures all resources are properly released even if some operations fail.
+// Returns a combined error if any close operations fail.
 func (ft *FileTransfer) Disconnect() error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
 
 	var errors []string
 
-	// Close the SCP client
+	// Close clients in reverse order of creation
 	ft.scpClient.Close()
 
-	// Close the SFTP client
 	if ft.sftpClient != nil {
 		if err := ft.sftpClient.Close(); err != nil {
 			errors = append(errors, fmt.Sprintf("SFTP client close error: %v", err))
@@ -128,7 +142,6 @@ func (ft *FileTransfer) Disconnect() error {
 		ft.sftpClient = nil
 	}
 
-	// Close the SSH client
 	if ft.sshClient != nil {
 		if err := ft.sshClient.Close(); err != nil {
 			errors = append(errors, fmt.Sprintf("SSH client close error: %v", err))
@@ -146,6 +159,7 @@ func (ft *FileTransfer) Disconnect() error {
 }
 
 // IsConnected checks if the SSH connection is active
+// Thread-safe method that returns the current connection state
 func (ft *FileTransfer) IsConnected() bool {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -153,17 +167,21 @@ func (ft *FileTransfer) IsConnected() bool {
 }
 
 // ListLocalFiles returns a list of files in the local directory
+// The path should be provided in the local system format
 func (ft *FileTransfer) ListLocalFiles(path string) ([]os.FileInfo, error) {
-	dir, err := os.Open(path)
+	// Normalize path for local system
+	normalizedPath := utils.NormalizePath(path, false)
+
+	dir, err := os.Open(normalizedPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open local directory: %v", err)
 	}
 	defer dir.Close()
-
 	return dir.Readdir(-1)
 }
 
 // ListRemoteFiles returns a list of files in the remote directory
+// The path will be automatically converted to UNIX format
 func (ft *FileTransfer) ListRemoteFiles(path string) ([]os.FileInfo, error) {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -172,10 +190,13 @@ func (ft *FileTransfer) ListRemoteFiles(path string) ([]os.FileInfo, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	return ft.sftpClient.ReadDir(path)
+	// Normalize path for remote system
+	normalizedPath := utils.NormalizePath(path, true)
+	return ft.sftpClient.ReadDir(normalizedPath)
 }
 
 // GetRemoteFileInfo returns information about a remote file
+// The path will be automatically converted to UNIX format
 func (ft *FileTransfer) GetRemoteFileInfo(path string) (os.FileInfo, error) {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -184,10 +205,12 @@ func (ft *FileTransfer) GetRemoteFileInfo(path string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	return ft.sftpClient.Stat(path)
+	normalizedPath := utils.NormalizePath(path, true)
+	return ft.sftpClient.Stat(normalizedPath)
 }
 
 // CreateRemoteDirectory creates a directory on the remote server
+// The path will be automatically converted to UNIX format
 func (ft *FileTransfer) CreateRemoteDirectory(path string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -196,10 +219,12 @@ func (ft *FileTransfer) CreateRemoteDirectory(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	return ft.sftpClient.MkdirAll(path)
+	normalizedPath := utils.NormalizePath(path, true)
+	return ft.sftpClient.MkdirAll(normalizedPath)
 }
 
 // RemoveRemoteFile removes a file or directory on the remote server
+// The path will be automatically converted to UNIX format
 func (ft *FileTransfer) RemoveRemoteFile(path string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -208,26 +233,29 @@ func (ft *FileTransfer) RemoveRemoteFile(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
+	normalizedPath := utils.NormalizePath(path, true)
+
 	// First, try to remove as a file
-	err := ft.sftpClient.Remove(path)
+	err := ft.sftpClient.Remove(normalizedPath)
 	if err == nil {
 		return nil
 	}
 
 	// If it fails, check if it's a directory
-	info, err := ft.sftpClient.Stat(path)
+	info, err := ft.sftpClient.Stat(normalizedPath)
 	if err != nil {
 		return fmt.Errorf("failed to get file info: %v", err)
 	}
 
 	if info.IsDir() {
-		return ft.RemoveRemoteDirectoryRecursive(path)
+		return ft.RemoveRemoteDirectoryRecursive(normalizedPath)
 	}
 
 	return fmt.Errorf("failed to remove file: %v", err)
 }
 
 // RenameRemoteFile renames a file on the remote server
+// Both paths will be automatically converted to UNIX format
 func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -236,10 +264,14 @@ func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	return ft.sftpClient.Rename(oldPath, newPath)
+	normalizedOldPath := utils.NormalizePath(oldPath, true)
+	normalizedNewPath := utils.NormalizePath(newPath, true)
+
+	return ft.sftpClient.Rename(normalizedOldPath, normalizedNewPath)
 }
 
 // GetRemoteHomeDir returns the home directory on the remote server
+// The returned path will be in UNIX format
 func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -259,10 +291,13 @@ func (ft *FileTransfer) GetRemoteHomeDir() (string, error) {
 		return "", fmt.Errorf("failed to execute command: %v", err)
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	homePath := strings.TrimSpace(string(output))
+	return utils.NormalizePath(homePath, true), nil
 }
 
 // UploadFile uploads a file to the server using SCP
+// Both paths will be normalized according to their respective systems
+// Progress will be reported through the provided channel
 func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan chan<- TransferProgress) error {
 	ft.mutex.Lock()
 	if !ft.connected {
@@ -271,8 +306,12 @@ func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan ch
 	}
 	ft.mutex.Unlock()
 
+	// Normalize paths for respective systems
+	normalizedLocalPath := utils.NormalizePath(localPath, false)
+	normalizedRemotePath := utils.NormalizePath(remotePath, true)
+
 	// Open local file
-	localFile, err := os.Open(localPath)
+	localFile, err := os.Open(normalizedLocalPath)
 	if err != nil {
 		return fmt.Errorf("failed to open local file: %v", err)
 	}
@@ -298,14 +337,14 @@ func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan ch
 		return &ProgressReader{
 			Reader:    r,
 			Total:     total,
-			FileName:  filepath.Base(localPath),
+			FileName:  filepath.Base(localPath), // Use original name for display
 			StartTime: startTime,
 			Progress:  progressChan,
 		}
 	}
 
 	// Copy file to remote server
-	err = ft.scpClient.CopyFilePassThru(ctx, localFile, remotePath, perm, passThru)
+	err = ft.scpClient.CopyFilePassThru(ctx, localFile, normalizedRemotePath, perm, passThru)
 	if err != nil {
 		return fmt.Errorf("error while uploading file: %v", err)
 	}
@@ -314,6 +353,8 @@ func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan ch
 }
 
 // DownloadFile downloads a file from the server using SCP
+// Both paths will be normalized according to their respective systems
+// Progress will be reported through the provided channel
 func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan chan<- TransferProgress) error {
 	ft.mutex.Lock()
 	if !ft.connected {
@@ -322,8 +363,19 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 	}
 	ft.mutex.Unlock()
 
+	// Normalize paths for respective systems
+	normalizedRemotePath := utils.NormalizePath(remotePath, true)
+	normalizedLocalPath := utils.NormalizePath(localPath, false)
+
+	// Create directory structure if it doesn't exist
+	if dir := filepath.Dir(normalizedLocalPath); dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory structure: %v", err)
+		}
+	}
+
 	// Open local file for writing
-	localFile, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	localFile, err := os.OpenFile(normalizedLocalPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to create local file: %v", err)
 	}
@@ -340,14 +392,14 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 		return &ProgressReader{
 			Reader:    r,
 			Total:     total,
-			FileName:  filepath.Base(remotePath),
+			FileName:  filepath.Base(remotePath), // Use original name for display
 			StartTime: startTime,
 			Progress:  progressChan,
 		}
 	}
 
 	// Copy file from remote server
-	err = ft.scpClient.CopyFromRemotePassThru(ctx, localFile, remotePath, passThru)
+	err = ft.scpClient.CopyFromRemotePassThru(ctx, localFile, normalizedRemotePath, passThru)
 	if err != nil {
 		return fmt.Errorf("error while downloading file: %v", err)
 	}
@@ -356,6 +408,7 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 }
 
 // RemoveRemoteDirectoryRecursive removes a directory recursively on the remote server
+// All paths will be normalized to UNIX format
 func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
@@ -364,13 +417,17 @@ func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	entries, err := ft.sftpClient.ReadDir(path)
+	// Normalize input path
+	normalizedPath := utils.NormalizePath(path, true)
+
+	entries, err := ft.sftpClient.ReadDir(normalizedPath)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
 	for _, entry := range entries {
-		fullPath := filepath.Join(path, entry.Name())
+		// Use forward slashes for remote paths
+		fullPath := utils.NormalizePath(filepath.Join(normalizedPath, entry.Name()), true)
 		if entry.IsDir() {
 			if err := ft.RemoveRemoteDirectoryRecursive(fullPath); err != nil {
 				return err
@@ -382,10 +439,12 @@ func (ft *FileTransfer) RemoveRemoteDirectoryRecursive(path string) error {
 		}
 	}
 
-	return ft.sftpClient.RemoveDirectory(path)
+	return ft.sftpClient.RemoveDirectory(normalizedPath)
 }
 
 // UploadDirectory uploads an entire directory to the server
+// All paths will be normalized according to their respective systems
+// Progress is reported through the provided channel
 func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressChan chan<- TransferProgress) error {
 	ft.mutex.Lock()
 	if !ft.connected {
@@ -394,23 +453,29 @@ func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressCh
 	}
 	ft.mutex.Unlock()
 
+	// Normalize the initial paths
+	normalizedLocalPath := utils.NormalizePath(localPath, false)
+	normalizedRemotePath := utils.NormalizePath(remotePath, true)
+
 	// Create the destination directory
-	if err := ft.CreateRemoteDirectory(remotePath); err != nil {
+	if err := ft.CreateRemoteDirectory(normalizedRemotePath); err != nil {
 		return fmt.Errorf("failed to create remote directory: %v", err)
 	}
 
 	// Walk through the directory and transfer files
-	err := filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(normalizedLocalPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		relPath, err := filepath.Rel(localPath, path)
+		// Get relative path from source directory
+		relPath, err := filepath.Rel(normalizedLocalPath, path)
 		if err != nil {
 			return err
 		}
 
-		remotePathFull := filepath.Join(remotePath, relPath)
+		// Create remote path using normalized path joining
+		remotePathFull := utils.NormalizePath(filepath.Join(normalizedRemotePath, relPath), true)
 
 		if info.IsDir() {
 			return ft.CreateRemoteDirectory(remotePathFull)
@@ -427,6 +492,8 @@ func (ft *FileTransfer) UploadDirectory(localPath, remotePath string, progressCh
 }
 
 // DownloadDirectory downloads a directory from the server
+// All paths will be normalized according to their respective systems
+// Progress is reported through the provided channel
 func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progressChan chan<- TransferProgress) error {
 	ft.mutex.Lock()
 	if !ft.connected {
@@ -435,21 +502,25 @@ func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progress
 	}
 	ft.mutex.Unlock()
 
+	// Normalize paths
+	normalizedRemotePath := utils.NormalizePath(remotePath, true)
+	normalizedLocalPath := utils.NormalizePath(localPath, false)
+
 	// Create local directory
-	if err := os.MkdirAll(localPath, 0755); err != nil {
+	if err := os.MkdirAll(normalizedLocalPath, 0755); err != nil {
 		return fmt.Errorf("failed to create local directory: %v", err)
 	}
 
 	// Get list of files
-	entries, err := ft.sftpClient.ReadDir(remotePath)
+	entries, err := ft.sftpClient.ReadDir(normalizedRemotePath)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
 	// Process each file/directory
 	for _, entry := range entries {
-		remoteSrcPath := filepath.Join(remotePath, entry.Name())
-		localDstPath := filepath.Join(localPath, entry.Name())
+		remoteSrcPath := utils.NormalizePath(filepath.Join(normalizedRemotePath, entry.Name()), true)
+		localDstPath := utils.NormalizePath(filepath.Join(normalizedLocalPath, entry.Name()), false)
 
 		if entry.IsDir() {
 			if err := ft.DownloadDirectory(remoteSrcPath, localDstPath, progressChan); err != nil {
@@ -466,6 +537,7 @@ func (ft *FileTransfer) DownloadDirectory(remotePath, localPath string, progress
 }
 
 // ProgressReader wraps an io.Reader to report progress
+// This structure remains unchanged as it doesn't deal with paths
 type ProgressReader struct {
 	Reader         io.Reader
 	Total          int64
@@ -476,6 +548,8 @@ type ProgressReader struct {
 	LastReportTime time.Time
 }
 
+// Read implements io.Reader interface and reports transfer progress
+// This method remains unchanged as it doesn't deal with paths
 func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	n, err = pr.Reader.Read(p)
 	pr.Transferred += int64(n)
