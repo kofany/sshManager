@@ -14,6 +14,8 @@ import (
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/components"
 
+	"sshManager/internal/utils"
+
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -605,45 +607,111 @@ func (v *transferView) copyFile() tea.Cmd {
 	srcPanel := v.getActivePanel()
 	dstPanel := v.getInactivePanel()
 
-	// Zbierz wszystkie zaznaczone pliki i foldery
 	var itemsToCopy []struct {
 		srcPath string
 		dstPath string
 		isDir   bool
 	}
 
-	// Najpierw sprawdź aktualnie wybrany element, jeśli nie ma zaznaczonych
 	if !v.hasSelectedItems() {
 		if len(srcPanel.entries) == 0 || srcPanel.selectedIndex >= len(srcPanel.entries) {
 			v.handleError(fmt.Errorf("no file selected"))
 			return nil
 		}
 		entry := srcPanel.entries[srcPanel.selectedIndex]
-		srcPath := filepath.Join(srcPanel.path, entry.name)
-		dstPath := filepath.Join(dstPanel.path, entry.name)
+
+		fileName := entry.name
+		isUpload := srcPanel == &v.localPanel
+
+		// Pomiń ".." jako źródło kopiowania
+		if fileName == ".." {
+			v.handleError(fmt.Errorf("cannot copy parent directory reference"))
+			return nil
+		}
+
+		var srcPath, dstPath string
+
+		if isUpload {
+			// Transfer lokalny -> zdalny
+			srcPath = filepath.Join(srcPanel.path, fileName)
+			if utils.IsUNCPath(srcPath) {
+				srcPath = utils.PreserveUNCPath(srcPath)
+			}
+			dstPath = utils.NormalizePath(filepath.Join(dstPanel.path, fileName), true)
+		} else {
+			// Transfer zdalny -> lokalny
+			srcPath = utils.NormalizePath(filepath.Join(srcPanel.path, fileName), true)
+			dstPath = filepath.Join(dstPanel.path, fileName)
+			if utils.IsUNCPath(dstPath) {
+				dstPath = utils.PreserveUNCPath(dstPath)
+			} else {
+				dstPath = utils.NormalizePath(dstPath, false)
+			}
+		}
+
 		itemsToCopy = append(itemsToCopy, struct {
 			srcPath string
 			dstPath string
 			isDir   bool
 		}{srcPath, dstPath, entry.isDir})
+
 	} else {
-		// Dodaj wszystkie zaznaczone elementy
+		// Obsługa zaznaczonych elementów
 		for path, isSelected := range v.getSelectedItems() {
-			if isSelected {
-				baseName := filepath.Base(path)
-				dstPath := filepath.Join(dstPanel.path, baseName)
-				// Sprawdź czy to folder czy plik
+			if !isSelected {
+				continue
+			}
+
+			baseName := filepath.Base(path)
+			if baseName == ".." {
+				continue
+			}
+
+			var srcPath, dstPath string
+			isUpload := srcPanel == &v.localPanel
+
+			if isUpload {
+				// Transfer lokalny -> zdalny
+				srcPath = path
+				if utils.IsUNCPath(srcPath) {
+					srcPath = utils.PreserveUNCPath(srcPath)
+				}
+				dstPath = utils.NormalizePath(filepath.Join(dstPanel.path, baseName), true)
+			} else {
+				// Transfer zdalny -> lokalny
+				srcPath = utils.NormalizePath(path, true)
+				dstPath = filepath.Join(dstPanel.path, baseName)
+				if utils.IsUNCPath(dstPath) {
+					dstPath = utils.PreserveUNCPath(dstPath)
+				} else {
+					dstPath = utils.NormalizePath(dstPath, false)
+				}
+			}
+
+			// Sprawdź czy to folder czy plik
+			var isDir bool
+			if srcPanel == &v.localPanel {
 				info, err := os.Stat(path)
 				if err != nil {
 					v.handleError(fmt.Errorf("cannot access %s: %v", path, err))
 					continue
 				}
-				itemsToCopy = append(itemsToCopy, struct {
-					srcPath string
-					dstPath string
-					isDir   bool
-				}{path, dstPath, info.IsDir()})
+				isDir = info.IsDir()
+			} else {
+				// Dla zdalnego systemu używamy informacji z entries
+				for _, entry := range srcPanel.entries {
+					if entry.name == baseName {
+						isDir = entry.isDir
+						break
+					}
+				}
 			}
+
+			itemsToCopy = append(itemsToCopy, struct {
+				srcPath string
+				dstPath string
+				isDir   bool
+			}{srcPath, dstPath, isDir})
 		}
 	}
 
@@ -659,12 +727,10 @@ func (v *transferView) copyFile() tea.Cmd {
 
 	transfer := v.model.GetTransfer()
 
-	// Zwróć komendę rozpoczynającą transfer
 	return func() tea.Msg {
 		progressChan := make(chan ssh.TransferProgress)
 		doneChan := make(chan error, 1)
 
-		// Uruchom transfer w goroutine
 		go func() {
 			var totalErr error
 			for _, item := range itemsToCopy {
@@ -691,14 +757,12 @@ func (v *transferView) copyFile() tea.Cmd {
 			close(progressChan)
 		}()
 
-		// Goroutine do czytania postępu i wysyłania wiadomości
 		go func() {
 			for progress := range progressChan {
 				v.model.Program.Send(transferProgressMsg(progress))
 			}
 			err := <-doneChan
 			v.model.Program.Send(transferFinishedMsg{err: err})
-			// Wyczyść zaznaczenie po zakończeniu
 			v.model.ClearSelection()
 		}()
 
