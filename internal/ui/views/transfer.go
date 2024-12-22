@@ -13,6 +13,7 @@ import (
 	"sshManager/internal/ssh"
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/components"
+	"sshManager/internal/utils"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -626,11 +627,11 @@ func (v *transferView) copyFile() tea.Cmd {
 		if isLocal {
 			// Local to Remote
 			srcPath = filepath.Join(srcPanel.path, srcName)
-			dstPath = toSFTPPath(filepath.Join(dstPanel.path, dstName))
+			dstPath = utils.ToSFTPPath(filepath.Join(dstPanel.path, dstName))
 		} else {
 			// Remote to Local
-			srcPath = toSFTPPath(filepath.Join(srcPanel.path, srcName))
-			dstPath = toLocalPath(filepath.Join(dstPanel.path, dstName))
+			srcPath = utils.ToSFTPPath(filepath.Join(srcPanel.path, srcName))
+			dstPath = utils.ToLocalPath(filepath.Join(dstPanel.path, dstName))
 		}
 
 		itemsToCopy = append(itemsToCopy, struct {
@@ -653,11 +654,11 @@ func (v *transferView) copyFile() tea.Cmd {
 			if isLocal {
 				// Local to Remote
 				srcPath = filepath.Join(srcPanel.path, srcName)
-				dstPath = toSFTPPath(filepath.Join(dstPanel.path, dstName))
+				dstPath = utils.ToSFTPPath(filepath.Join(dstPanel.path, dstName))
 			} else {
 				// Remote to Local
-				srcPath = toSFTPPath(filepath.Join(srcPanel.path, srcName))
-				dstPath = toLocalPath(filepath.Join(dstPanel.path, dstName))
+				srcPath = utils.ToSFTPPath(filepath.Join(srcPanel.path, srcName))
+				dstPath = utils.ToLocalPath(filepath.Join(dstPanel.path, dstName))
 			}
 
 			info, err := os.Stat(path)
@@ -730,7 +731,7 @@ func (v *transferView) copyFile() tea.Cmd {
 }
 
 func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
-	remotePath = toSFTPPath(remotePath)
+	remotePath = utils.ToSFTPPath(remotePath)
 	if err := transfer.CreateRemoteDirectory(remotePath); err != nil {
 		return fmt.Errorf("failed to create remote directory: %v", err)
 	}
@@ -746,7 +747,7 @@ func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, trans
 		}
 
 		// Konwersja ścieżki na format SFTP
-		remotePathFull := toSFTPPath(filepath.Join(remotePath, relPath))
+		remotePathFull := utils.ToSFTPPath(filepath.Join(remotePath, relPath))
 
 		if info.IsDir() {
 			return transfer.CreateRemoteDirectory(remotePathFull)
@@ -761,7 +762,7 @@ func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, tra
 		return fmt.Errorf("failed to create local directory: %v", err)
 	}
 
-	remotePath = toSFTPPath(remotePath)
+	remotePath = utils.ToSFTPPath(remotePath)
 	entries, err := transfer.ListRemoteFiles(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
@@ -773,7 +774,7 @@ func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, tra
 			continue
 		}
 
-		remoteSrcPath := toSFTPPath(filepath.Join(remotePath, entry.Name()))
+		remoteSrcPath := utils.ToSFTPPath(filepath.Join(remotePath, entry.Name()))
 		localDstPath := filepath.Join(localPath, entry.Name())
 
 		if entry.IsDir() {
@@ -912,7 +913,7 @@ func (v *transferView) createDirectory(name string) error {
 	return nil
 }
 
-// renameFile zmienia nazwę pliku
+// renameFile changes the name of a file in the active panel
 func (v *transferView) renameFile(newName string) error {
 	if newName == "" {
 		return fmt.Errorf("new name cannot be empty")
@@ -933,17 +934,21 @@ func (v *transferView) renameFile(newName string) error {
 
 	var err error
 	if panel == &v.localPanel {
+		// For local files, use standard os.Rename
 		err = os.Rename(oldPath, newPath)
 	} else {
+		// For remote files, convert paths to SFTP format
 		transfer := v.model.GetTransfer()
-		err = transfer.RenameRemoteFile(oldPath, newPath)
+		oldPathSFTP := utils.ToSFTPPath(oldPath)
+		newPathSFTP := utils.ToSFTPPath(newPath)
+		err = transfer.RenameRemoteFile(oldPathSFTP, newPathSFTP)
 	}
 
 	if err != nil {
 		return fmt.Errorf("failed to rename file: %v", err)
 	}
 
-	// Odśwież panel
+	// Refresh the panel after renaming
 	if panel == &v.localPanel {
 		err = v.updateLocalPanel()
 	} else {
@@ -1767,20 +1772,4 @@ func (v *transferView) renderFooter() string {
 	}
 
 	return footerContent.String()
-}
-
-// toSFTPPath converts local path to SFTP path format
-func toSFTPPath(path string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ReplaceAll(path, "\\", "/")
-	}
-	return path
-}
-
-// toLocalPath converts SFTP path to local path format
-func toLocalPath(path string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ReplaceAll(path, "/", "\\")
-	}
-	return path
 }

@@ -8,13 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"sshManager/internal/crypto"
 	"sshManager/internal/models"
+	"sshManager/internal/utils"
 
 	scp "github.com/bramvdbogaerde/go-scp"
 	"github.com/pkg/sftp"
@@ -237,6 +237,10 @@ func (ft *FileTransfer) RenameRemoteFile(oldPath, newPath string) error {
 		return fmt.Errorf("not connected")
 	}
 
+	// Konwertuj obie ścieżki do formatu SFTP (Unix-style)
+	oldPath = utils.ToSFTPPath(oldPath)
+	newPath = utils.ToSFTPPath(newPath)
+
 	return ft.sftpClient.Rename(oldPath, newPath)
 }
 
@@ -272,7 +276,7 @@ func (ft *FileTransfer) UploadFile(localPath, remotePath string, progressChan ch
 	ft.mutex.Unlock()
 
 	// Convert remote path to SFTP format (ensure forward slashes)
-	remotePath = toSFTPPath(remotePath)
+	remotePath = utils.ToSFTPPath(remotePath)
 
 	// Use local path as is since it's already in correct format for the OS
 	localFile, err := os.Open(localPath)
@@ -326,8 +330,8 @@ func (ft *FileTransfer) DownloadFile(remotePath, localPath string, progressChan 
 	ft.mutex.Unlock()
 
 	// Convert paths appropriately
-	remotePath = toSFTPPath(remotePath)
-	localPath = toLocalPath(localPath)
+	remotePath = utils.ToSFTPPath(remotePath)
+	localPath = utils.ToLocalPath(localPath)
 
 	// Ensure the target directory exists
 	targetDir := filepath.Dir(localPath)
@@ -513,20 +517,4 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	}
 
 	return n, err
-}
-
-// toSFTPPath converts local path to SFTP path format
-func toSFTPPath(path string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ReplaceAll(path, "\\", "/")
-	}
-	return path
-}
-
-// toLocalPath converts SFTP path to local path format
-func toLocalPath(path string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ReplaceAll(path, "/", "\\")
-	}
-	return path
 }
