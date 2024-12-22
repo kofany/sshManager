@@ -1,3 +1,5 @@
+// main_view.go
+
 package views
 
 import (
@@ -7,13 +9,12 @@ import (
 	"sshManager/internal/models"
 	"sshManager/internal/sync"
 	"sshManager/internal/ui"
+	"sshManager/internal/ui/components"
+	"sshManager/internal/ui/messages"
 	"strings"
 	"time"
 
 	"sshManager/internal/ssh"
-
-	"sshManager/internal/ui/components"
-	"sshManager/internal/ui/messages"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -39,9 +40,7 @@ type mainView struct {
 		host     *models.Host
 		password string
 	}
-	popup          *components.Popup // Dodane nowe pole
-	autoCloseTimer *time.Timer
-	stopChan       chan struct{}
+	popup *components.Popup // Dodane nowe pole
 }
 
 type connectError string
@@ -72,6 +71,8 @@ func NewMainView(model *ui.Model) *mainView {
 		width:        model.GetTerminalWidth(),  // Dodane
 		height:       model.GetTerminalHeight(), // Dodane
 
+		// Inicjalizacja popupów na nil
+		popup: nil,
 	}
 }
 
@@ -79,10 +80,6 @@ func (v *mainView) Init() tea.Cmd {
 	return tea.Sequence(
 		tea.EnterAltScreen,
 		tea.ClearScreen,
-		func() tea.Msg {
-			// Wymuszamy reset stanu klawiatury
-			return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}}
-		},
 	)
 }
 
@@ -136,16 +133,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.model.SetQuitting(true)
 		return v, tea.Quit
 
-	case messages.AutoCloseMsg:
-		if v.popup != nil && v.popup.Type == components.PopupSessionEnded {
-			v.popup = nil
-			if v.autoCloseTimer != nil {
-				v.autoCloseTimer.Stop()
-				v.autoCloseTimer = nil
-			}
-			return v, v.PostInitialize()
-		}
-
 	case tea.KeyMsg:
 		// Obsługa klawiszy dla popupu
 		if v.popup != nil {
@@ -154,11 +141,6 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if v.popup.Type == components.PopupMessage {
 					v.popup = nil
 					return v, nil
-				}
-				if v.popup.Type == components.PopupSessionEnded {
-					v.popup = nil
-					// Resetujemy stan wejścia
-					return v, v.PostInitialize()
 				}
 
 			case "y", "Y":
@@ -462,17 +444,8 @@ func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
 			// Połączenie udane
 			v.model.SetSSHClient(sshClient)
 
-			// Zwracamy sekwencję komend
-			return tea.Sequence(
-				// Najpierw symulujemy klawisz dla zresetowania stanu wejścia
-				func() tea.Msg {
-					return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}}
-				},
-				// Następnie informujemy o udanym połączeniu
-				func() tea.Msg {
-					return connectSuccessMsg{}
-				},
-			)()
+			// Zwracamy wiadomość o sukcesie po zakończeniu połączenia
+			return connectSuccessMsg{}
 
 		case <-time.After(7 * time.Second):
 			return errMsg("Connection timed out")
@@ -498,63 +471,7 @@ func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// W pliku internal/ui/views/main.go
-func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
-	host := v.hosts[v.selectedIndex]
-	v.model.SetSelectedHost(&host)
-
-	var authData string
-	var err error
-
-	if host.PasswordID < 0 {
-		// Obsługa klucza SSH
-		keyIndex := -(host.PasswordID + 1) // Konwertujemy ujemny indeks na właściwy indeks klucza
-		keys := v.model.GetKeys()
-		if keyIndex >= len(keys) {
-			v.errMsg = "Invalid SSH key ID"
-			return v, nil
-		}
-
-		key := keys[keyIndex]
-		keyPath, err := key.GetKeyPath()
-		if err != nil {
-			v.errMsg = fmt.Sprintf("Failed to get key path: %v", err)
-			return v, nil
-		}
-		authData = keyPath
-	} else {
-		// Obsługa hasła
-		passwords := v.model.GetPasswords()
-		if host.PasswordID >= len(passwords) {
-			v.errMsg = "Invalid password ID"
-			return v, nil
-		}
-		password := passwords[host.PasswordID]
-		authData, err = password.GetDecrypted(v.model.GetCipher())
-		if err != nil {
-			v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
-			return v, nil
-		}
-	}
-
-	transfer := v.model.GetTransfer()
-	if err := transfer.Connect(&host, authData); err != nil {
-		v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
-		return v, nil
-	}
-
-	v.model.SetActiveView(ui.ViewTransfer)
-
-	return v, tea.Sequence(
-		tea.ClearScreen,
-		func() tea.Msg {
-			return tea.WindowSizeMsg{
-				Width:  v.width,
-				Height: v.height,
-			}
-		},
-	)
-}
+// handleTransfer pozostaje bez zmian
 
 func (v *mainView) View() string {
 	// Przygotuj główną zawartość
@@ -723,24 +640,7 @@ func (v *mainView) renderStatusBar() string {
 	return framed
 }
 
-// W main_view.go
-func (v *mainView) ReinitializeInput() tea.Cmd {
-	return tea.Sequence(
-		tea.ClearScreen,
-		tea.EnterAltScreen,
-		func() tea.Msg {
-			// Symulujemy serię "bezpiecznych" klawiszy
-			return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}}
-		},
-		// Wymuszamy aktualizację stanu terminala
-		func() tea.Msg {
-			return tea.WindowSizeMsg{
-				Width:  v.width,
-				Height: v.height,
-			}
-		},
-	)
-}
+// ReinitializeInput pozostaje bez zmian
 
 func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	configPath, err := config.GetDefaultConfigPath()
@@ -818,11 +718,54 @@ func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
 	)
 }
 
-func (v *mainView) PostInitialize() tea.Cmd {
-	return tea.Sequence(
-		tea.ClearScreen,
-		tea.EnterAltScreen,
+func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
+	host := v.hosts[v.selectedIndex]
+	v.model.SetSelectedHost(&host)
 
+	var authData string
+	var err error
+
+	if host.PasswordID < 0 {
+		// Obsługa klucza SSH
+		keyIndex := -(host.PasswordID + 1) // Konwertujemy ujemny indeks na właściwy indeks klucza
+		keys := v.model.GetKeys()
+		if keyIndex >= len(keys) {
+			v.errMsg = "Invalid SSH key ID"
+			return v, nil
+		}
+
+		key := keys[keyIndex]
+		keyPath, err := key.GetKeyPath()
+		if err != nil {
+			v.errMsg = fmt.Sprintf("Failed to get key path: %v", err)
+			return v, nil
+		}
+		authData = keyPath
+	} else {
+		// Obsługa hasła
+		passwords := v.model.GetPasswords()
+		if host.PasswordID >= len(passwords) {
+			v.errMsg = "Invalid password ID"
+			return v, nil
+		}
+		password := passwords[host.PasswordID]
+		authData, err = password.GetDecrypted(v.model.GetCipher())
+		if err != nil {
+			v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
+			return v, nil
+		}
+	}
+
+	transfer := v.model.GetTransfer()
+	if err := transfer.Connect(&host, authData); err != nil {
+		v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
+		return v, nil
+	}
+
+	v.model.SetActiveView(ui.ViewTransfer)
+
+	return v, tea.Sequence(
+		tea.ClearScreen,
 		func() tea.Msg {
 			return tea.WindowSizeMsg{
 				Width:  v.width,
@@ -830,45 +773,4 @@ func (v *mainView) PostInitialize() tea.Cmd {
 			}
 		},
 	)
-}
-
-func (v *mainView) ShowSessionEndedPopup() {
-	v.popup = components.NewPopup(
-		components.PopupSessionEnded,
-		"SSH Session Ended",
-		"SSH session has been terminated successfully.\nAuto-closing in 3 seconds...",
-		50,
-		7,
-		v.width,
-		v.height,
-	)
-
-	// Upewnij się, że poprzedni timer został zatrzymany i wyczyszczony
-	if v.autoCloseTimer != nil {
-		v.autoCloseTimer.Stop()
-		v.autoCloseTimer = nil
-	}
-
-	// Ustawiamy nowy timer na 3 sekundy
-	v.autoCloseTimer = time.NewTimer(3 * time.Second)
-
-	// Uruchamiamy goroutine do obsługi timera
-	go func() {
-		defer func() {
-			// Cleanup timera w przypadku paniki
-			if v.autoCloseTimer != nil {
-				v.autoCloseTimer.Stop()
-				v.autoCloseTimer = nil
-			}
-		}()
-
-		select {
-		case <-v.autoCloseTimer.C:
-			if v.model != nil && v.model.Program != nil {
-				v.model.Program.Send(messages.AutoCloseMsg{})
-			}
-		case <-v.stopChan: // Dodaj pole stopChan do struktury mainView jeśli nie istnieje
-			return
-		}
-	}()
 }

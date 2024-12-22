@@ -34,12 +34,12 @@ type KeyMap struct {
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "up"),
+			key.WithKeys("up", "w"),
+			key.WithHelp("↑/w", "up"),
 		),
 		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "down"),
+			key.WithKeys("down", "s"),
+			key.WithHelp("↓/s", "down"),
 		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
