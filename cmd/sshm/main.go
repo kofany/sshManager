@@ -239,28 +239,39 @@ func main() {
 		}
 
 		// Jeśli mamy aktywne połączenie SSH
+		// W main.go, w głównej pętli
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
-				// Zapisujemy aktualny program przed zwolnieniem terminala
 				savedProgram = p
 
-				// Zwalniamy terminal przed rozpoczęciem sesji SSH
 				if err := p.ReleaseTerminal(); err != nil {
 					fmt.Fprintf(os.Stderr, "Failed to release terminal: %v\n", err)
 					continue
 				}
 
-				// Konfigurujemy i uruchamiamy sesję SSH
-				if err := session.ConfigureTerminal("xterm-256color"); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to configure terminal: %v\n", err)
-				} else if err := session.StartShell(); err != nil {
-					fmt.Fprintf(os.Stderr, "Shell error: %v\n", err)
+				// Sesja SSH
+				sessionDone := make(chan error)
+				go func() {
+					if err := session.ConfigureTerminal("xterm-256color"); err != nil {
+						sessionDone <- fmt.Errorf("failed to configure terminal: %v", err)
+						return
+					}
+					sessionDone <- session.StartShell()
+				}()
+
+				if err := <-sessionDone; err != nil {
+					fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
 				}
 
-				// Czyszczenie po sesji SSH
+				// Zamykamy sesję
+				sshClient.Disconnect()
 				m.uiModel.SetSSHClient(nil)
 				m.uiModel.SetActiveView(ui.ViewMain)
-				m.updateCurrentView()
+
+				// Tworzymy nowy widok główny z popupem
+				mainView := views.NewMainView(m.uiModel)
+				mainView.ShowSessionEndedPopup()
+				m.currentView = mainView
 
 				continue
 			}
