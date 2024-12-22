@@ -14,8 +14,6 @@ import (
 	"sshManager/internal/ui"
 	"sshManager/internal/ui/components"
 
-	"sshManager/internal/utils"
-
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -174,13 +172,8 @@ func (v *transferView) updateLocalPanel() error {
 	return nil
 }
 
-// readLocalDirectory reads and returns the content of a local directory
-// with proper path normalization and sorting
 func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
-	// Normalize path for local system
-	normalizedPath := utils.NormalizePath(path, false)
-
-	dir, err := os.Open(normalizedPath)
+	dir, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +184,7 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 		return nil, err
 	}
 
-	// Always start with ".." for navigation up
+	// Zawsze zaczynamy od ".." do nawigacji w górę
 	entries := []FileEntry{{
 		name:    "..",
 		isDir:   true,
@@ -199,22 +192,22 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 	}}
 
 	for _, fi := range fileInfos {
-		// Skip hidden files starting with "." (optional)
-		// but always include ".." for navigation
+		// Pomijamy ukryte pliki zaczynające się od "." (opcjonalnie)
 		if !strings.HasPrefix(fi.Name(), ".") || fi.Name() == ".." {
 			entries = append(entries, FileEntry{
-				name:    fi.Name(), // Keep original name for display
+				name:    fi.Name(),
 				size:    fi.Size(),
 				modTime: fi.ModTime(),
 				isDir:   fi.IsDir(),
-				mode:    fi.Mode(),
+				mode:    fi.Mode(), // Dodane
+
 			})
 		}
 	}
 
-	// Sort: directories first, then files, alphabetically
+	// Sortowanie: najpierw katalogi, potem pliki, alfabetycznie
 	sort.Slice(entries[1:], func(i, j int) bool {
-		// Adjust indices to skip ".."
+		// Przesuwamy indeksy o 1, bo pomijamy ".."
 		i, j = i+1, j+1
 		if entries[i].isDir != entries[j].isDir {
 			return entries[i].isDir
@@ -225,52 +218,42 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 	return entries, nil
 }
 
-// Init initializes the transfer view and starts connection if needed
 func (v *transferView) Init() tea.Cmd {
 	if !v.connected && !v.connecting && v.model.GetSelectedHost() != nil {
 		v.connecting = true
-		return v.sendConnectionUpdate()
+		return v.sendConnectionUpdate() // Usuń argument program
 	}
 	return nil
 }
 
-// updateRemotePanel refreshes the content of the remote panel
 func (v *transferView) updateRemotePanel() error {
 	if err := v.ensureConnected(); err != nil {
 		return err
 	}
 
-	// Normalize remote panel path
-	normalizedPath := utils.NormalizePath(v.remotePanel.path, true)
-
-	entries, err := v.readRemoteDirectory(normalizedPath)
+	entries, err := v.readRemoteDirectory(v.remotePanel.path)
 	if err != nil {
-		v.setConnected(false) // Mark as disconnected in case of error
+		v.setConnected(false) // Oznacz jako rozłączony w przypadku błędu
 		return err
 	}
-
 	v.remotePanel.entries = entries
 	return nil
 }
 
-// readRemoteDirectory reads and returns the content of a remote directory
-// with proper path normalization and sorting
+// readRemoteDirectory czyta zawartość zdalnego katalogu
 func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 	if err := v.ensureConnected(); err != nil {
 		return nil, err
 	}
 
-	// Normalize path for remote system
-	normalizedPath := utils.NormalizePath(path, true)
-
 	transfer := v.model.GetTransfer()
-	fileInfos, err := transfer.ListRemoteFiles(normalizedPath)
+	fileInfos, err := transfer.ListRemoteFiles(path)
 	if err != nil {
 		v.setConnected(false)
 		return nil, fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
-	// Always start with ".." for navigation up
+	// Zawsze zaczynamy od ".." do nawigacji w górę
 	entries := []FileEntry{{
 		name:    "..",
 		isDir:   true,
@@ -280,16 +263,16 @@ func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 	for _, fi := range fileInfos {
 		if !strings.HasPrefix(fi.Name(), ".") || fi.Name() == ".." {
 			entries = append(entries, FileEntry{
-				name:    fi.Name(), // Keep original name for display
+				name:    fi.Name(),
 				size:    fi.Size(),
 				modTime: fi.ModTime(),
 				isDir:   fi.IsDir(),
-				mode:    fi.Mode(),
+				mode:    fi.Mode(), // Dodane
 			})
 		}
 	}
 
-	// Sort: directories first, then files, alphabetically
+	// Sortowanie: najpierw katalogi, potem pliki, alfabetycznie
 	sort.Slice(entries[1:], func(i, j int) bool {
 		i, j = i+1, j+1
 		if entries[i].isDir != entries[j].isDir {
@@ -301,8 +284,7 @@ func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 	return entries, nil
 }
 
-// getActivePanel returns the currently active panel (local or remote)
-// Used for determining the source panel in file operations
+// getActivePanel zwraca aktywny panel
 func (v *transferView) getActivePanel() *Panel {
 	if v.localPanel.active {
 		return &v.localPanel
@@ -310,8 +292,7 @@ func (v *transferView) getActivePanel() *Panel {
 	return &v.remotePanel
 }
 
-// getInactivePanel returns the currently inactive panel (local or remote)
-// Used for determining the destination panel in file operations
+// getInactivePanel zwraca nieaktywny panel
 func (v *transferView) getInactivePanel() *Panel {
 	if v.localPanel.active {
 		return &v.remotePanel
@@ -319,35 +300,25 @@ func (v *transferView) getInactivePanel() *Panel {
 	return &v.localPanel
 }
 
-// switchActivePanel toggles the active state between local and remote panels
-// This method ensures that exactly one panel is active at any time
+// switchActivePanel przełącza aktywny panel
 func (v *transferView) switchActivePanel() {
-	v.mutex.Lock()
-	defer v.mutex.Unlock()
 	v.localPanel.active = !v.localPanel.active
 	v.remotePanel.active = !v.remotePanel.active
 }
 
-// renderPanel renders a single panel (either local or remote) with proper formatting
-// It handles path display, file listing, and scroll information
 func (v *transferView) renderPanel(p *Panel) string {
-	v.mutex.Lock()
-	defer v.mutex.Unlock()
-
 	var content strings.Builder
 
-	// Calculate panel width based on terminal size
+	// Oblicz szerokość panelu
 	panelWidth := (min(v.width-40, 160) - 3) / 2
 
-	// Prepare panel content with proper styling
+	// Zastosuj styl panelu z ramką
 	var panelContent strings.Builder
 
-	// Format and shorten the path for display
-	// For remote panel, ensure the path is displayed in Unix style
-	displayPath := utils.NormalizePath(p.path, p == &v.remotePanel)
-	pathText := formatPath(displayPath, min(40, panelWidth-5))
+	// Formatowanie i skracanie ścieżki
+	pathText := formatPath(p.path, min(40, panelWidth-5))
 
-	// Apply appropriate path style based on panel state
+	// Użycie stylów ścieżki
 	pathStyle := inactivePathStyle
 	if p.active {
 		pathStyle = activePathStyle
@@ -355,7 +326,7 @@ func (v *transferView) renderPanel(p *Panel) string {
 	panelContent.WriteString(pathStyle.Render(pathText))
 	panelContent.WriteString("\n")
 
-	// Render file list with proper scrolling
+	// Renderowanie listy plików
 	filesList := v.renderFileList(
 		p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
 		p.selectedIndex-p.scrollOffset,
@@ -364,7 +335,7 @@ func (v *transferView) renderPanel(p *Panel) string {
 	)
 	panelContent.WriteString(filesList)
 
-	// Add scroll information if needed
+	// Informacja o przewijaniu
 	if len(p.entries) > maxVisibleItems {
 		panelContent.WriteString(fmt.Sprintf("\nShowing %d-%d of %d items",
 			p.scrollOffset+1,
@@ -372,7 +343,7 @@ func (v *transferView) renderPanel(p *Panel) string {
 			len(p.entries)))
 	}
 
-	// Apply final panel styling with border
+	// Zastosuj styl całego panelu
 	content.WriteString(panelStyle.
 		Width(panelWidth).
 		BorderForeground(ui.Subtle).
@@ -381,12 +352,9 @@ func (v *transferView) renderPanel(p *Panel) string {
 	return content.String()
 }
 
-// View renders the complete transfer view including panels, status information,
-// progress bars, and popups. This is the main rendering function called by the TUI framework.
 func (v *transferView) View() string {
 	var content strings.Builder
-
-	// Render title and connection status
+	// Tytuł i status połączenia
 	titleContent := ui.TitleStyle.Render("File Transfer")
 	if v.connected {
 		if host := v.model.GetSelectedHost(); host != nil {
@@ -405,7 +373,7 @@ func (v *transferView) View() string {
 	}
 	content.WriteString(titleContent + "\n\n")
 
-	// Show connecting status screen
+	// Obsługa stanu łączenia
 	if v.connecting {
 		connectingContent := ui.DescriptionStyle.Render("Establishing SFTP connection...")
 		return lipgloss.Place(
@@ -417,7 +385,7 @@ func (v *transferView) View() string {
 		)
 	}
 
-	// Show help screen if requested
+	// Obsługa widoku pomocy
 	if v.showHelp {
 		helpContent := ui.DescriptionStyle.Render(helpText)
 		return lipgloss.Place(
@@ -429,11 +397,11 @@ func (v *transferView) View() string {
 		)
 	}
 
-	// Calculate panel dimensions
-	totalWidth := min(v.width-40, 160) // Reduce width for margins
-	panelWidth := (totalWidth - 3) / 2 // Account for separator width
+	// Oblicz szerokość paneli na podstawie szerokości ekranu
+	totalWidth := min(v.width-40, 160) // Zmniejszamy szerokość o marginesy (20 z każdej strony)
+	panelWidth := (totalWidth - 3) / 2 // 3 to szerokość separatora
 
-	// Render panels
+	// Renderuj panele
 	leftPanel := v.renderPanel(&v.localPanel)
 	rightPanel := ""
 	if !v.connected {
@@ -442,12 +410,12 @@ func (v *transferView) View() string {
 		rightPanel = v.renderPanel(&v.remotePanel)
 	}
 
-	// Align panels by padding with spaces
+	// Wyrównaj panele
 	leftLines := strings.Split(leftPanel, "\n")
 	rightLines := strings.Split(rightPanel, "\n")
 	maxLines := max(len(leftLines), len(rightLines))
 
-	// Ensure both panels have the same number of lines
+	// Wyrównaj liczbę linii w panelach
 	for i := len(leftLines); i < maxLines; i++ {
 		leftLines = append(leftLines, strings.Repeat(" ", panelWidth))
 	}
@@ -455,7 +423,7 @@ func (v *transferView) View() string {
 		rightLines = append(rightLines, strings.Repeat(" ", panelWidth))
 	}
 
-	// Join panels with separator
+	// Połącz panele
 	for i := 0; i < maxLines; i++ {
 		content.WriteString(leftLines[i])
 		content.WriteString(" │ ")
@@ -463,27 +431,25 @@ func (v *transferView) View() string {
 		content.WriteString("\n")
 	}
 
-	// Add progress bar during transfer
+	// Pasek postępu
 	if v.transferring {
 		content.WriteString("\n")
 		progressBar := v.formatProgressBar(totalWidth)
 		content.WriteString(ui.DescriptionStyle.Render(progressBar))
 	}
 
-	// Add input field if waiting for user input
 	if v.isWaitingForInput() {
 		content.WriteString("\n" + v.input.View())
 	}
 
-	// Add footer
 	footer := v.renderFooter()
 	content.WriteString("\n")
 	content.WriteString(footer)
 
-	// Wrap content in window style
+	// Renderuj całość w oknie
 	finalContent := ui.WindowStyle.Render(content.String())
 
-	// If popup is active, render it on top
+	// Jeśli jest aktywny popup, renderuj go na wierzchu (wycentrowany)
 	if v.popup != nil {
 		return lipgloss.Place(
 			v.width,
@@ -496,19 +462,19 @@ func (v *transferView) View() string {
 		)
 	}
 
-	// Render main view aligned to top-left
+	// Główny widok wyrównany do lewego górnego rogu
 	return lipgloss.Place(
 		v.width,
 		v.height,
-		lipgloss.Left,
-		lipgloss.Top,
+		lipgloss.Left, // Zmiana z Center na Left
+		lipgloss.Top,  // Zmiana z Center na Top
 		finalContent,
 		lipgloss.WithWhitespaceChars(""),
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
 }
 
-// max returns the larger of two integers
+// Pomocnicza funkcja do określania maksimum
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -516,7 +482,7 @@ func max(a, b int) int {
 	return b
 }
 
-// min returns the smaller of two integers
+// Pomocnicza funkcja min
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -524,8 +490,7 @@ func min(a, b int) int {
 	return b
 }
 
-// formatSize formats a file size in bytes to a human-readable string
-// using appropriate units (B, KB, MB, GB, TB, PB, EB)
+// formatSize formatuje rozmiar pliku
 func formatSize(size int64) string {
 	const unit = 1024
 	if size < unit {
@@ -540,8 +505,7 @@ func formatSize(size int64) string {
 		float64(size)/float64(div), "KMGTPE"[exp])
 }
 
-// navigatePanel handles panel navigation and scroll adjustment
-// It ensures proper wrapping and scroll position
+// navigatePanel obsługuje nawigację w panelu
 func (v *transferView) navigatePanel(p *Panel, direction int) {
 	if len(p.entries) == 0 {
 		p.selectedIndex = 0
@@ -549,30 +513,30 @@ func (v *transferView) navigatePanel(p *Panel, direction int) {
 		return
 	}
 
-	// Calculate new index with wrapping
 	newIndex := p.selectedIndex + direction
+
 	if newIndex < 0 {
 		newIndex = len(p.entries) - 1
 	} else if newIndex >= len(p.entries) {
 		newIndex = 0
 	}
+
 	p.selectedIndex = newIndex
 
-	// Adjust scroll position
+	// Dostosuj przewijanie
 	if p.selectedIndex < p.scrollOffset {
 		p.scrollOffset = p.selectedIndex
 	} else if p.selectedIndex >= p.scrollOffset+maxVisibleItems {
 		p.scrollOffset = p.selectedIndex - maxVisibleItems + 1
 	}
 
-	// Ensure scrollOffset is never negative
+	// Upewnij się, że scrollOffset nie jest ujemny
 	if p.scrollOffset < 0 {
 		p.scrollOffset = 0
 	}
 }
 
-// enterDirectory changes the current directory in the specified panel
-// It handles both local and remote directory navigation
+// enterDirectory wchodzi do wybranego katalogu
 func (v *transferView) enterDirectory(p *Panel) error {
 	if len(p.entries) == 0 || p.selectedIndex >= len(p.entries) {
 		return nil
@@ -584,52 +548,41 @@ func (v *transferView) enterDirectory(p *Panel) error {
 	}
 
 	var newPath string
-	isRemote := p == &v.remotePanel
-
 	if entry.name == ".." {
-		// Handle parent directory navigation
-		currentPath := utils.NormalizePath(p.path, isRemote)
-		if isRemote {
-			newPath = filepath.ToSlash(filepath.Dir(currentPath))
-		} else {
-			newPath = filepath.Dir(currentPath)
-			// Special handling for Windows root directories
-			if runtime.GOOS == "windows" && filepath.Dir(newPath) == newPath {
-				newPath = filepath.VolumeName(newPath) + string(filepath.Separator)
-			}
+		// Nawigacja do góry
+		newPath = filepath.Dir(p.path)
+		// Dla Windows możemy potrzebować dodatkowej obsługi ścieżki głównej
+		if runtime.GOOS == "windows" && filepath.Dir(newPath) == newPath {
+			newPath = filepath.VolumeName(newPath) + "\\"
 		}
 	} else {
-		// Handle entering a subdirectory
 		newPath = filepath.Join(p.path, entry.name)
-		newPath = utils.NormalizePath(newPath, isRemote)
 	}
 
-	// Save current path for rollback
+	// Zapisz poprzednią ścieżkę
 	oldPath := p.path
 	p.path = newPath
 
-	// Try to refresh directory content
+	// Spróbuj odświeżyć zawartość
 	var err error
-	if isRemote {
-		err = v.updateRemotePanel()
-	} else {
+	if p == &v.localPanel {
 		err = v.updateLocalPanel()
+	} else {
+		err = v.updateRemotePanel()
 	}
 
-	// Rollback on error
+	// W przypadku błędu, przywróć poprzednią ścieżkę
 	if err != nil {
 		p.path = oldPath
-		return fmt.Errorf("failed to enter directory: %v", err)
+		return err
 	}
 
-	// Reset selection and scroll position
+	// Resetuj wybór i przewijanie
 	p.selectedIndex = 0
 	p.scrollOffset = 0
 	return nil
 }
 
-// hasSelectedItems checks if any items are currently selected in the file transfer view.
-// Returns true if at least one item is selected, false otherwise.
 func (v *transferView) hasSelectedItems() bool {
 	for _, isSelected := range v.getSelectedItems() {
 		if isSelected {
@@ -639,101 +592,93 @@ func (v *transferView) hasSelectedItems() bool {
 	return false
 }
 
-// getSelectedItems returns a map of selected file paths.
-// The map keys are file paths and values are always true for selected items.
-// This method relies on the model's GetSelectedPaths method to get the actual selection data.
 func (v *transferView) getSelectedItems() map[string]bool {
 	selected := make(map[string]bool)
-	paths := v.model.GetSelectedPaths()
+	paths := v.model.GetSelectedPaths() // zakładając, że taka metoda istnieje w Model
 	for _, path := range paths {
 		selected[path] = true
 	}
 	return selected
 }
 
-// copyFile handles the file transfer operation between local and remote systems.
-// It supports both single file/directory transfer and multiple selected items transfer.
-// The function uses proper path normalization for both Windows and Unix systems.
-// It handles:
-// - Single file/directory transfer when nothing is selected
-// - Multiple selected items transfer
-// - Different path formats for local and remote systems
-// - Progress monitoring and error handling
 func (v *transferView) copyFile() tea.Cmd {
-	// Lock to safely access panels
-	v.mutex.Lock()
 	srcPanel := v.getActivePanel()
 	dstPanel := v.getInactivePanel()
-	v.mutex.Unlock()
 
-	// Structure to hold items that need to be copied
 	var itemsToCopy []struct {
 		srcPath string
 		dstPath string
 		isDir   bool
 	}
 
-	// Single item copy logic
 	if !v.hasSelectedItems() {
-		v.mutex.Lock()
 		if len(srcPanel.entries) == 0 || srcPanel.selectedIndex >= len(srcPanel.entries) {
-			v.mutex.Unlock()
 			v.handleError(fmt.Errorf("no file selected"))
 			return nil
 		}
-
 		entry := srcPanel.entries[srcPanel.selectedIndex]
-		fileName := entry.name
-		isUpload := srcPanel == &v.localPanel
-		v.mutex.Unlock()
 
-		// Prevent copying parent directory reference
-		if fileName == ".." {
-			v.handleError(fmt.Errorf("cannot copy parent directory reference"))
-			return nil
+		isLocal := srcPanel == &v.localPanel
+		srcName := filepath.Base(entry.name)
+		dstName := srcName
+
+		var srcPath, dstPath string
+		if isLocal {
+			// Local to Remote
+			srcPath = filepath.Join(srcPanel.path, srcName)
+			dstPath = toSFTPPath(filepath.Join(dstPanel.path, dstName))
+		} else {
+			// Remote to Local
+			srcPath = toSFTPPath(filepath.Join(srcPanel.path, srcName))
+			dstPath = toLocalPath(filepath.Join(dstPanel.path, dstName))
 		}
 
-		srcPath, dstPath := v.buildPaths(srcPanel, dstPanel, fileName, isUpload)
 		itemsToCopy = append(itemsToCopy, struct {
 			srcPath string
 			dstPath string
 			isDir   bool
 		}{srcPath, dstPath, entry.isDir})
 	} else {
-		// Multiple items copy logic
+		// Handle selected files
 		for path, isSelected := range v.getSelectedItems() {
 			if !isSelected {
 				continue
 			}
 
-			baseName := filepath.Base(path)
-			if baseName == ".." {
-				continue
+			isLocal := srcPanel == &v.localPanel
+			srcName := filepath.Base(path)
+			dstName := srcName
+
+			var srcPath, dstPath string
+			if isLocal {
+				// Local to Remote
+				srcPath = filepath.Join(srcPanel.path, srcName)
+				dstPath = toSFTPPath(filepath.Join(dstPanel.path, dstName))
+			} else {
+				// Remote to Local
+				srcPath = toSFTPPath(filepath.Join(srcPanel.path, srcName))
+				dstPath = toLocalPath(filepath.Join(dstPanel.path, dstName))
 			}
 
-			isUpload := srcPanel == &v.localPanel
-			srcPath, dstPath := v.buildPaths(srcPanel, dstPanel, baseName, isUpload)
-
-			isDir := v.determineItemType(srcPanel, path, baseName)
-			if isDir == nil {
-				continue // Error already handled
+			info, err := os.Stat(path)
+			if err != nil {
+				v.handleError(fmt.Errorf("cannot access %s: %v", path, err))
+				continue
 			}
 
 			itemsToCopy = append(itemsToCopy, struct {
 				srcPath string
 				dstPath string
 				isDir   bool
-			}{srcPath, dstPath, *isDir})
+			}{srcPath, dstPath, info.IsDir()})
 		}
 	}
 
-	// Verify we have items to copy
 	if len(itemsToCopy) == 0 {
 		v.handleError(fmt.Errorf("no items to copy"))
 		return nil
 	}
 
-	// Update transfer status
 	v.mutex.Lock()
 	v.transferring = true
 	v.statusMessage = "Copying files..."
@@ -741,140 +686,51 @@ func (v *transferView) copyFile() tea.Cmd {
 
 	transfer := v.model.GetTransfer()
 
-	return v.createTransferCommand(srcPanel, transfer, itemsToCopy)
-}
-
-// buildPaths constructs source and destination paths for file transfer.
-// It handles path normalization for both local and remote systems,
-// including special handling for UNC paths in Windows.
-// Parameters:
-//   - srcPanel: source panel (local or remote)
-//   - dstPanel: destination panel (local or remote)
-//   - fileName: name of the file to transfer
-//   - isUpload: true if transferring from local to remote, false otherwise
-func (v *transferView) buildPaths(srcPanel, dstPanel *Panel, fileName string, isUpload bool) (string, string) {
-	if isUpload {
-		// Local to remote transfer
-		srcPath := filepath.Join(srcPanel.path, fileName)
-		if utils.IsUNCPath(srcPath) {
-			srcPath = utils.PreserveUNCPath(srcPath)
-		}
-		dstPath := utils.NormalizePath(filepath.Join(dstPanel.path, fileName), true)
-		return srcPath, dstPath
-	}
-	// Remote to local transfer
-	srcPath := utils.NormalizePath(filepath.Join(srcPanel.path, fileName), true)
-	dstPath := filepath.Join(dstPanel.path, fileName)
-	if utils.IsUNCPath(dstPath) {
-		dstPath = utils.PreserveUNCPath(dstPath)
-	} else {
-		dstPath = utils.NormalizePath(dstPath, false)
-	}
-	return srcPath, dstPath
-}
-
-// determineItemType checks if the given path represents a directory.
-// For local items, it uses os.Stat.
-// For remote items, it searches through the panel entries.
-// Returns a pointer to bool (true for directory, false for file) or nil if an error occurs.
-func (v *transferView) determineItemType(srcPanel *Panel, path, baseName string) *bool {
-	var isDir bool
-	if srcPanel == &v.localPanel {
-		info, err := os.Stat(path)
-		if err != nil {
-			v.handleError(fmt.Errorf("cannot access %s: %v", path, err))
-			return nil
-		}
-		isDir = info.IsDir()
-	} else {
-		found := false
-		for _, entry := range srcPanel.entries {
-			if entry.name == baseName {
-				isDir = entry.isDir
-				found = true
-				break
-			}
-		}
-		if !found {
-			v.handleError(fmt.Errorf("cannot find %s in remote directory", baseName))
-			return nil
-		}
-	}
-	return &isDir
-}
-
-// createTransferCommand creates a tea.Cmd that handles the file transfer process.
-// It sets up the progress monitoring channels and starts the transfer goroutines.
-func (v *transferView) createTransferCommand(srcPanel *Panel, transfer *ssh.FileTransfer, itemsToCopy []struct {
-	srcPath string
-	dstPath string
-	isDir   bool
-}) tea.Cmd {
 	return func() tea.Msg {
 		progressChan := make(chan ssh.TransferProgress)
 		doneChan := make(chan error, 1)
 
-		go v.handleTransferProcess(srcPanel, transfer, itemsToCopy, progressChan, doneChan)
-		go v.monitorTransferProgress(progressChan, doneChan)
+		go func() {
+			var totalErr error
+			for _, item := range itemsToCopy {
+				var err error
+				if item.isDir {
+					if srcPanel == &v.localPanel {
+						err = v.copyDirectoryToRemote(item.srcPath, item.dstPath, transfer, progressChan)
+					} else {
+						err = v.copyDirectoryFromRemote(item.srcPath, item.dstPath, transfer, progressChan)
+					}
+				} else {
+					if srcPanel == &v.localPanel {
+						err = transfer.UploadFile(item.srcPath, item.dstPath, progressChan)
+					} else {
+						err = transfer.DownloadFile(item.srcPath, item.dstPath, progressChan)
+					}
+				}
+				if err != nil {
+					totalErr = fmt.Errorf("error copying %s: %v", item.srcPath, err)
+					break
+				}
+			}
+			doneChan <- totalErr
+			close(progressChan)
+		}()
+
+		go func() {
+			for progress := range progressChan {
+				v.model.Program.Send(transferProgressMsg(progress))
+			}
+			err := <-doneChan
+			v.model.Program.Send(transferFinishedMsg{err: err})
+			v.model.ClearSelection()
+		}()
 
 		return nil
 	}
 }
 
-// handleTransferProcess manages the actual file transfer operation.
-// It processes each item in the transfer queue and reports progress.
-// This function runs in its own goroutine.
-func (v *transferView) handleTransferProcess(srcPanel *Panel, transfer *ssh.FileTransfer, itemsToCopy []struct {
-	srcPath string
-	dstPath string
-	isDir   bool
-}, progressChan chan<- ssh.TransferProgress, doneChan chan<- error) {
-	var totalErr error
-	for _, item := range itemsToCopy {
-		var err error
-		if item.isDir {
-			if srcPanel == &v.localPanel {
-				err = v.copyDirectoryToRemote(item.srcPath, item.dstPath, transfer, progressChan)
-			} else {
-				err = v.copyDirectoryFromRemote(item.srcPath, item.dstPath, transfer, progressChan)
-			}
-		} else {
-			if srcPanel == &v.localPanel {
-				err = transfer.UploadFile(item.srcPath, item.dstPath, progressChan)
-			} else {
-				err = transfer.DownloadFile(item.srcPath, item.dstPath, progressChan)
-			}
-		}
-		if err != nil {
-			totalErr = fmt.Errorf("error copying %s: %v", item.srcPath, err)
-			break
-		}
-	}
-	doneChan <- totalErr
-	close(progressChan)
-}
-
-// monitorTransferProgress handles progress updates and completion status
-// of the file transfer operation. This function runs in its own goroutine.
-func (v *transferView) monitorTransferProgress(progressChan <-chan ssh.TransferProgress, doneChan <-chan error) {
-	for progress := range progressChan {
-		v.model.Program.Send(transferProgressMsg(progress))
-	}
-	err := <-doneChan
-	v.model.Program.Send(transferFinishedMsg{err: err})
-	v.model.ClearSelection()
-}
-
-// copyDirectoryToRemote recursively copies a local directory to the remote system.
-// It handles path normalization and maintains the directory structure.
-// Parameters:
-//   - localPath: source path on local system
-//   - remotePath: destination path on remote system
-//   - transfer: SFTP transfer client
-//   - progressChan: channel for reporting transfer progress
 func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
-	// Normalize remote path for SFTP
-	remotePath = utils.NormalizePath(remotePath, true)
+	remotePath = toSFTPPath(remotePath)
 	if err := transfer.CreateRemoteDirectory(remotePath); err != nil {
 		return fmt.Errorf("failed to create remote directory: %v", err)
 	}
@@ -884,14 +740,13 @@ func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, trans
 			return err
 		}
 
-		// Get path relative to source directory
 		relPath, err := filepath.Rel(localPath, path)
 		if err != nil {
 			return fmt.Errorf("failed to get relative path: %v", err)
 		}
 
-		// Build and normalize remote path
-		remotePathFull := utils.NormalizePath(filepath.Join(remotePath, relPath), true)
+		// Konwersja ścieżki na format SFTP
+		remotePathFull := toSFTPPath(filepath.Join(remotePath, relPath))
 
 		if info.IsDir() {
 			return transfer.CreateRemoteDirectory(remotePathFull)
@@ -901,34 +756,25 @@ func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, trans
 	})
 }
 
-// copyDirectoryFromRemote recursively copies a remote directory to the local system.
-// It creates the necessary local directory structure and copies all files.
-// Parameters:
-//   - remotePath: source path on remote system
-//   - localPath: destination path on local system
-//   - transfer: SFTP transfer client
-//   - progressChan: channel for reporting transfer progress
 func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, transfer *ssh.FileTransfer, progressChan chan<- ssh.TransferProgress) error {
-	// Create local directory structure
 	if err := os.MkdirAll(localPath, 0755); err != nil {
 		return fmt.Errorf("failed to create local directory: %v", err)
 	}
 
-	// Normalize remote path for SFTP
-	remotePath = utils.NormalizePath(remotePath, true)
+	remotePath = toSFTPPath(remotePath)
 	entries, err := transfer.ListRemoteFiles(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
 	for _, entry := range entries {
-		// Skip special directories
+		// Pomijamy "." i ".."
 		if entry.Name() == "." || entry.Name() == ".." {
 			continue
 		}
 
-		remoteSrcPath := utils.NormalizePath(filepath.Join(remotePath, entry.Name()), true)
-		localDstPath := utils.NormalizePath(filepath.Join(localPath, entry.Name()), false)
+		remoteSrcPath := toSFTPPath(filepath.Join(remotePath, entry.Name()))
+		localDstPath := filepath.Join(localPath, entry.Name())
 
 		if entry.IsDir() {
 			if err := v.copyDirectoryFromRemote(remoteSrcPath, localDstPath, transfer, progressChan); err != nil {
@@ -944,36 +790,28 @@ func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, tra
 	return nil
 }
 
-// executeDelete handles file or directory deletion on both local and remote systems.
-// It supports recursive deletion for directories and handles path normalization.
-// After successful deletion, it refreshes the panel view.
+// executeDelete wykonuje faktyczne usuwanie pliku
 func (v *transferView) executeDelete() error {
-	v.mutex.Lock()
 	panel := v.getActivePanel()
 	entry := panel.entries[panel.selectedIndex]
-	v.mutex.Unlock()
+	path := filepath.Join(panel.path, entry.name)
 
-	// Build and normalize path based on system type
-	isRemote := panel == &v.remotePanel
-	path := utils.NormalizePath(filepath.Join(panel.path, entry.name), isRemote)
-
+	var err error
 	itemType := "file"
 	if entry.isDir {
 		itemType = "directory"
 	}
 
-	var err error
 	if panel == &v.localPanel {
-		// Local deletion
 		if entry.isDir {
 			err = os.RemoveAll(path)
 		} else {
 			err = os.Remove(path)
 		}
 	} else {
-		// Remote deletion
 		transfer := v.model.GetTransfer()
 		if entry.isDir {
+			// Rekursywne usuwanie katalogu na zdalnym serwerze
 			err = v.removeRemoteDirectory(path, transfer)
 		} else {
 			err = transfer.RemoveRemoteFile(path)
@@ -984,7 +822,7 @@ func (v *transferView) executeDelete() error {
 		return fmt.Errorf("failed to delete %s '%s': %v", itemType, entry.name, err)
 	}
 
-	// Refresh panel after deletion
+	// Odśwież panel po usunięciu
 	if panel == &v.localPanel {
 		err = v.updateLocalPanel()
 	} else {
@@ -999,70 +837,55 @@ func (v *transferView) executeDelete() error {
 	return nil
 }
 
-// removeRemoteDirectory recursively removes a directory on the remote system.
-// It first removes all files and subdirectories before removing the directory itself.
-// Parameters:
-//   - path: path to the remote directory to remove
-//   - transfer: SFTP transfer client for remote operations
 func (v *transferView) removeRemoteDirectory(path string, transfer *ssh.FileTransfer) error {
-	// Normalize remote path and get directory contents
-	normalizedPath := utils.NormalizePath(path, true)
-	entries, err := transfer.ListRemoteFiles(normalizedPath)
+	// Pobierz listę plików w katalogu
+	entries, err := transfer.ListRemoteFiles(path)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
-	// Recursively remove directory contents
+	// Rekurencyjnie usuń zawartość katalogu
 	for _, entry := range entries {
-		// Skip special directory entries
 		if entry.Name() == "." || entry.Name() == ".." {
 			continue
 		}
 
-		// Build and normalize full path for each entry
-		fullPath := utils.NormalizePath(filepath.Join(normalizedPath, entry.Name()), true)
-
+		fullPath := filepath.Join(path, entry.Name())
 		if entry.IsDir() {
-			// Recursively remove subdirectory
+			// Rekurencyjnie usuń podkatalog
 			if err := v.removeRemoteDirectory(fullPath, transfer); err != nil {
 				return err
 			}
 		} else {
-			// Remove regular file
+			// Usuń plik
 			if err := transfer.RemoveRemoteFile(fullPath); err != nil {
 				return err
 			}
 		}
 	}
 
-	// Finally, remove the empty directory itself
-	return transfer.RemoveRemoteFile(normalizedPath)
+	// Na końcu usuń sam katalog
+	return transfer.RemoveRemoteFile(path)
 }
 
-// createDirectory creates a new directory in either local or remote system.
-// It validates the directory name, creates the directory, and refreshes the panel view.
-// Parameters:
-//   - name: name of the directory to create (without path)
+// createDirectory tworzy nowy katalog
 func (v *transferView) createDirectory(name string) error {
-	// Validate directory name
 	if name == "" {
 		return fmt.Errorf("directory name cannot be empty")
 	}
+
+	// Sprawdź czy nazwa nie zawiera niedozwolonych znaków
 	if strings.ContainsAny(name, "/\\") {
 		return fmt.Errorf("directory name cannot contain path separators")
 	}
 
-	// Get active panel and build path
 	panel := v.getActivePanel()
-	isRemote := panel == &v.remotePanel
-	path := utils.NormalizePath(filepath.Join(panel.path, name), isRemote)
+	path := filepath.Join(panel.path, name)
 
 	var err error
 	if panel == &v.localPanel {
-		// Create local directory
 		err = os.MkdirAll(path, 0755)
 	} else {
-		// Create remote directory
 		if !v.connected {
 			return fmt.Errorf("not connected to remote host")
 		}
@@ -1074,7 +897,7 @@ func (v *transferView) createDirectory(name string) error {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
-	// Refresh panel to show new directory
+	// Odśwież panel
 	if panel == &v.localPanel {
 		err = v.updateLocalPanel()
 	} else {
@@ -1089,17 +912,12 @@ func (v *transferView) createDirectory(name string) error {
 	return nil
 }
 
-// renameFile renames a file or directory in either local or remote system.
-// It validates the new name, performs the rename operation, and refreshes the panel view.
-// Parameters:
-//   - newName: new name for the file/directory (without path)
+// renameFile zmienia nazwę pliku
 func (v *transferView) renameFile(newName string) error {
-	// Validate new name
 	if newName == "" {
 		return fmt.Errorf("new name cannot be empty")
 	}
 
-	// Get active panel and current selection
 	panel := v.getActivePanel()
 	if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
 		return fmt.Errorf("no file selected")
@@ -1110,17 +928,13 @@ func (v *transferView) renameFile(newName string) error {
 		return fmt.Errorf("cannot rename parent directory reference")
 	}
 
-	// Build and normalize paths
-	isRemote := panel == &v.remotePanel
-	oldPath := utils.NormalizePath(filepath.Join(panel.path, entry.name), isRemote)
-	newPath := utils.NormalizePath(filepath.Join(panel.path, newName), isRemote)
+	oldPath := filepath.Join(panel.path, entry.name)
+	newPath := filepath.Join(panel.path, newName)
 
 	var err error
 	if panel == &v.localPanel {
-		// Rename local file/directory
 		err = os.Rename(oldPath, newPath)
 	} else {
-		// Rename remote file/directory
 		transfer := v.model.GetTransfer()
 		err = transfer.RenameRemoteFile(oldPath, newPath)
 	}
@@ -1129,7 +943,7 @@ func (v *transferView) renameFile(newName string) error {
 		return fmt.Errorf("failed to rename file: %v", err)
 	}
 
-	// Refresh panel to show the renamed file/directory
+	// Odśwież panel
 	if panel == &v.localPanel {
 		err = v.updateLocalPanel()
 	} else {
@@ -1144,19 +958,17 @@ func (v *transferView) renameFile(newName string) error {
 	return nil
 }
 
-// handleError error handling function
+// handleError obsługuje błędy i wyświetla komunikat
 func (v *transferView) handleError(err error) {
 	if err != nil {
 		v.errorMessage = err.Error()
 	}
 }
 
-// Update handles all UI messages and user interactions in the transfer view.
-// It manages file operations, navigation, and view state changes.
-// Returns updated model and any commands to be executed.
+// update
+
 func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	// Handle window size changes
 	case tea.WindowSizeMsg:
 		v.mutex.Lock()
 		v.width = msg.Width
@@ -1165,14 +977,12 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mutex.Unlock()
 		return v, nil
 
-	// Handle file transfer progress updates
 	case transferProgressMsg:
 		v.mutex.Lock()
 		v.progress = ssh.TransferProgress(msg)
 		v.mutex.Unlock()
 		return v, nil
 
-	// Handle transfer completion status
 	case transferFinishedMsg:
 		v.mutex.Lock()
 		v.transferring = false
@@ -1181,16 +991,21 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				components.PopupMessage,
 				"Transfer Error",
 				fmt.Sprintf("Transfer error: %v", msg.err),
-				50, 7, v.width, v.height,
+				50,
+				7,
+				v.width,
+				v.height,
 			)
 		} else {
 			v.popup = components.NewPopup(
 				components.PopupMessage,
 				"Success",
 				"Transfer completed successfully",
-				50, 7, v.width, v.height,
+				50,
+				7,
+				v.width,
+				v.height,
 			)
-			// Refresh destination panel after successful transfer
 			dstPanel := v.getInactivePanel()
 			if dstPanel == &v.localPanel {
 				v.updateLocalPanel()
@@ -1201,7 +1016,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mutex.Unlock()
 		return v, nil
 
-	// Handle connection status updates
 	case connectionStatusMsg:
 		v.mutex.Lock()
 		v.connecting = false
@@ -1211,7 +1025,10 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				components.PopupMessage,
 				"Connection Error",
 				fmt.Sprintf("Connection error: %v", msg.err),
-				50, 7, v.width, v.height,
+				50,
+				7,
+				v.width,
+				v.height,
 			)
 		} else {
 			v.connected = msg.connected
@@ -1219,80 +1036,240 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.mutex.Unlock()
 		return v, nil
 
-	// Handle keyboard input
 	case tea.KeyMsg:
-		// Handle popup interactions
+		// Obsługa popupu
 		if v.popup != nil {
-			return v.handlePopupInput(msg)
+			switch msg.String() {
+			case "esc":
+				v.popup = nil
+				return v, nil
+			case "enter":
+				if v.popup.Type != components.PopupDelete {
+					// Użyj v.popup.Input zamiast v.input
+					if err := v.handleCommand(v.popup.Input.Value()); err != nil {
+						v.handleError(err)
+					}
+					v.popup = nil
+					return v, nil
+				}
+			case "y":
+				if v.popup.Type == components.PopupDelete {
+					if err := v.executeDelete(); err != nil {
+						v.handleError(err)
+					}
+					v.popup = nil
+					return v, nil
+				}
+			case "n":
+				if v.popup.Type == components.PopupDelete {
+					v.popup = nil
+					return v, nil
+				}
+			default:
+				if v.popup.Type != components.PopupDelete {
+					var cmd tea.Cmd
+					// Aktualizuj v.popup.Input zamiast v.input
+					v.popup.Input, cmd = v.popup.Input.Update(msg)
+					return v, cmd
+				}
+			}
+			return v, nil
 		}
-
-		// Handle help mode
+		// Obsługa trybu pomocy
 		if v.showHelp {
-			return v.handleHelpModeInput(msg)
+			switch msg.String() {
+			case "esc", "q", "f1":
+				v.showHelp = false
+				return v, nil
+			default:
+				return v, nil // Ignoruj inne klawisze w trybie pomocy
+			}
 		}
 
-		// Handle ESC sequence
+		// Obsługa sekwencji ESC
 		if v.escPressed {
-			return v.handleEscSequence(msg)
+			switch msg.String() {
+			case "0", "q":
+				if v.transferring {
+					return v, nil
+				}
+				if v.connected {
+					transfer := v.model.GetTransfer()
+					if transfer != nil {
+						transfer.Disconnect()
+					}
+				}
+				v.model.SetActiveView(ui.ViewMain)
+				return v, nil
+
+			case "5":
+				if !v.transferring {
+					cmd := v.copyFile()
+					v.escPressed = false
+					if v.escTimeout != nil {
+						v.escTimeout.Stop()
+					}
+					return v, cmd
+				}
+
+			case "6":
+				if !v.transferring {
+					v.popup = components.NewPopup(
+						components.PopupRename,
+						"Rename",
+						"Enter new name:",
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+					v.popup.Input.SetValue("")
+					v.popup.Input.Focus()
+				}
+				return v, nil
+
+			case "7":
+				if !v.transferring {
+					v.popup = components.NewPopup(
+						components.PopupMkdir,
+						"Create Directory",
+						"Enter directory name:",
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+					v.popup.Input.SetValue("")
+					v.popup.Input.Focus()
+				}
+				return v, nil
+
+			case "8":
+				if !v.transferring {
+					panel := v.getActivePanel()
+					if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
+						return v, nil
+					}
+					entry := panel.entries[panel.selectedIndex]
+					if entry.name == ".." {
+						return v, nil
+					}
+					v.popup = components.NewPopup(
+						components.PopupDelete,
+						"Delete",
+						fmt.Sprintf("Delete %s '%s'? (y/n)",
+							map[bool]string{true: "directory", false: "file"}[entry.isDir],
+							entry.name),
+						50,
+						7,
+						v.width,
+						v.height,
+					)
+				}
+				return v, nil
+			}
+			// Reset stan}u ESC
+			v.escPressed = false
+			if v.escTimeout != nil {
+				v.escTimeout.Stop()
+			}
+			return v, nil
 		}
 
-		// Handle single ESC press
+		// Pojedyncze naciśnięcie ESC
 		if msg.String() == "esc" {
-			return v.handleSingleEsc()
+			if v.popup != nil {
+				v.popup = nil
+				return v, nil
+			}
+			v.escPressed = true
+			if v.escTimeout != nil {
+				v.escTimeout.Stop()
+			}
+			v.escTimeout = time.NewTimer(500 * time.Millisecond)
+			go func() {
+				<-v.escTimeout.C
+				v.escPressed = false
+			}()
+			return v, nil
 		}
-		// Handle standard function keys and navigation
+
+		// Standardowe klawisze funkcyjne
 		switch msg.String() {
-		case " ": // Theme switching
+		case " ": // dodajemy jako pierwszy case
 			if !v.transferring {
 				ui.SwitchTheme()
 				return v, nil
 			}
-
-		case "f1": // Help toggle
+		case "f1":
 			v.showHelp = !v.showHelp
 			return v, nil
 
-		case "f5", "c": // Copy operation
+		case "f5", "c":
 			if !v.transferring {
 				cmd := v.copyFile()
 				return v, cmd
 			}
 			return v, nil
 
-		case "f6", "r": // Rename operation
+		case "f6", "r":
 			if !v.transferring {
 				v.popup = components.NewPopup(
 					components.PopupRename,
 					"Rename",
 					"Enter new name:",
-					50, 7, v.width, v.height,
+					50,
+					7,
+					v.width,
+					v.height,
 				)
 				v.popup.Input.SetValue("")
 				v.popup.Input.Focus()
 			}
 			return v, nil
 
-		case "f7", "m": // Create directory operation
+		case "f7", "m":
 			if !v.transferring {
 				v.popup = components.NewPopup(
 					components.PopupMkdir,
 					"Create Directory",
 					"Enter directory name:",
-					50, 7, v.width, v.height,
+					50,
+					7,
+					v.width,
+					v.height,
 				)
 				v.popup.Input.SetValue("")
 				v.popup.Input.Focus()
 			}
 			return v, nil
 
-		case "f8", "d": // Delete operation
+		case "f8", "d":
 			if !v.transferring {
-				return v.handleDeleteRequest()
+				panel := v.getActivePanel()
+				if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
+					return v, nil
+				}
+				entry := panel.entries[panel.selectedIndex]
+				if entry.name == ".." {
+					return v, nil
+				}
+				v.popup = components.NewPopup(
+					components.PopupDelete,
+					"Delete",
+					fmt.Sprintf("Delete %s '%s'? (y/n)",
+						map[bool]string{true: "directory", false: "file"}[entry.isDir],
+						entry.name),
+					50,
+					7,
+					v.width,
+					v.height,
+				)
 			}
 			return v, nil
 
-		// Navigation and control keys
-		case "q": // Quit/return to main view
+		// Standardowe klawisze nawigacji i kontroli
+		case "q":
 			if v.transferring {
 				return v, nil
 			}
@@ -1305,52 +1282,55 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.model.SetActiveView(ui.ViewMain)
 			return v, nil
 
-		case "tab": // Switch active panel
+		case "tab":
 			if v.connected {
 				v.switchActivePanel()
 				v.errorMessage = ""
 			}
 			return v, nil
 
-		case "up", "w": // Navigate up
+		case "up", "w":
 			panel := v.getActivePanel()
 			v.navigatePanel(panel, -1)
 			v.errorMessage = ""
 			return v, nil
 
-		case "down", "s": // Navigate down
+		case "down", "s":
 			panel := v.getActivePanel()
 			v.navigatePanel(panel, 1)
 			v.errorMessage = ""
 			return v, nil
 
-		case "enter": // Enter directory
+		case "enter":
 			panel := v.getActivePanel()
 			if err := v.enterDirectory(panel); err != nil {
 				v.popup = components.NewPopup(
 					components.PopupMessage,
 					"Error",
 					err.Error(),
-					50, 7, v.width, v.height,
+					50,
+					7,
+					v.width,
+					v.height,
 				)
 			}
 			return v, nil
 
-		case "x": // Toggle selection
+		case "x":
 			if !v.transferring {
 				panel := v.getActivePanel()
 				if len(panel.entries) > 0 && panel.selectedIndex < len(panel.entries) {
 					entry := panel.entries[panel.selectedIndex]
+					path := filepath.Join(panel.path, entry.name)
 					if entry.name != ".." {
-						path := filepath.Join(panel.path, entry.name)
 						v.model.ToggleSelection(path)
 					}
 				}
 			}
 			return v, nil
+
 		}
 
-	// Handle direct transfer progress updates
 	case ssh.TransferProgress:
 		v.progress = msg
 		return v, nil
@@ -1359,169 +1339,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return v, nil
 }
 
-// Helper method to handle delete request
-func (v *transferView) handleDeleteRequest() (tea.Model, tea.Cmd) {
-	panel := v.getActivePanel()
-	if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
-		return v, nil
-	}
-	entry := panel.entries[panel.selectedIndex]
-	if entry.name == ".." {
-		return v, nil
-	}
-	v.popup = components.NewPopup(
-		components.PopupDelete,
-		"Delete",
-		fmt.Sprintf("Delete %s '%s'? (y/n)",
-			map[bool]string{true: "directory", false: "file"}[entry.isDir],
-			entry.name),
-		50, 7, v.width, v.height,
-	)
-	return v, nil
-}
-
-// Helper method to handle popup input
-func (v *transferView) handlePopupInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		v.popup = nil
-		return v, nil
-	case "enter":
-		if v.popup.Type != components.PopupDelete {
-			if err := v.handleCommand(v.popup.Input.Value()); err != nil {
-				v.handleError(err)
-			}
-			v.popup = nil
-			return v, nil
-		}
-	case "y":
-		if v.popup.Type == components.PopupDelete {
-			if err := v.executeDelete(); err != nil {
-				v.handleError(err)
-			}
-			v.popup = nil
-			return v, nil
-		}
-	case "n":
-		if v.popup.Type == components.PopupDelete {
-			v.popup = nil
-			return v, nil
-		}
-	default:
-		if v.popup.Type != components.PopupDelete {
-			var cmd tea.Cmd
-			v.popup.Input, cmd = v.popup.Input.Update(msg)
-			return v, cmd
-		}
-	}
-	return v, nil
-}
-
-// handleHelpModeInput handles keyboard input while in help mode
-func (v *transferView) handleHelpModeInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "q", "f1":
-		v.showHelp = false
-		return v, nil
-	default:
-		return v, nil // Ignore other keys in help mode
-	}
-}
-
-// handleEscSequence handles ESC key sequence operations
-func (v *transferView) handleEscSequence(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "0", "q":
-		if v.transferring {
-			return v, nil
-		}
-		if v.connected {
-			transfer := v.model.GetTransfer()
-			if transfer != nil {
-				transfer.Disconnect()
-			}
-		}
-		v.model.SetActiveView(ui.ViewMain)
-		return v, nil
-
-	case "5": // Copy
-		if !v.transferring {
-			cmd := v.copyFile()
-			v.escPressed = false
-			if v.escTimeout != nil {
-				v.escTimeout.Stop()
-			}
-			return v, cmd
-		}
-
-	case "6": // Rename
-		if !v.transferring {
-			v.popup = components.NewPopup(
-				components.PopupRename,
-				"Rename",
-				"Enter new name:",
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-			v.popup.Input.SetValue("")
-			v.popup.Input.Focus()
-		}
-		return v, nil
-
-	case "7": // Create Directory
-		if !v.transferring {
-			v.popup = components.NewPopup(
-				components.PopupMkdir,
-				"Create Directory",
-				"Enter directory name:",
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-			v.popup.Input.SetValue("")
-			v.popup.Input.Focus()
-		}
-		return v, nil
-
-	case "8": // Delete
-		if !v.transferring {
-			return v.handleDeleteRequest()
-		}
-	}
-
-	// Reset ESC state
-	v.escPressed = false
-	if v.escTimeout != nil {
-		v.escTimeout.Stop()
-	}
-	return v, nil
-}
-
-// handleSingleEsc handles single ESC key press operations
-func (v *transferView) handleSingleEsc() (tea.Model, tea.Cmd) {
-	if v.popup != nil {
-		v.popup = nil
-		return v, nil
-	}
-
-	v.escPressed = true
-	if v.escTimeout != nil {
-		v.escTimeout.Stop()
-	}
-
-	v.escTimeout = time.NewTimer(500 * time.Millisecond)
-	go func() {
-		<-v.escTimeout.C
-		v.escPressed = false
-	}()
-
-	return v, nil
-}
-
-// ----------------------
 // handleCommand obsługuje wprowadzanie komend
 func (v *transferView) handleCommand(cmd string) error {
 	if v.popup == nil {
@@ -1950,4 +1767,20 @@ func (v *transferView) renderFooter() string {
 	}
 
 	return footerContent.String()
+}
+
+// toSFTPPath converts local path to SFTP path format
+func toSFTPPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ReplaceAll(path, "\\", "/")
+	}
+	return path
+}
+
+// toLocalPath converts SFTP path to local path format
+func toLocalPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ReplaceAll(path, "/", "\\")
+	}
+	return path
 }
