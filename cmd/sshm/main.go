@@ -238,8 +238,6 @@ func main() {
 			break
 		}
 
-		// Jeśli mamy aktywne połączenie SSH
-		// W main.go, w głównej pętli
 		if sshClient := m.uiModel.GetSSHClient(); sshClient != nil {
 			if session := sshClient.Session(); session != nil {
 				savedProgram = p
