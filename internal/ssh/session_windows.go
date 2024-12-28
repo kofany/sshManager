@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/terminal"
 	"golang.org/x/term"
 )
 
@@ -77,21 +76,36 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 }
 
 func (s *SSHSession) ConfigureTerminal(termType string) error {
-	// Dla Windows wymuszamy konkretne ustawienia terminala
+	// Dla Windows zawsze używamy xterm-256color
 	if runtime.GOOS == "windows" {
 		termType = "xterm-256color"
 	}
 
+	// Pełny zestaw flag kontroli terminala
 	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 115200, // Zwiększona prędkość
-		ssh.TTY_OP_OSPEED: 115200,
+		ssh.ECHO:          1,      // Włącz echo
+		ssh.TTY_OP_ISPEED: 115200, // Szybkość wejścia
+		ssh.TTY_OP_OSPEED: 115200, // Szybkość wyjścia
+		ssh.OCRNL:         0,      // Disable CR to NL mapping
+		ssh.ONLCR:         1,      // Map NL to CR-NL on output
+		ssh.ONLRET:        0,      // Don't output CR
+		ssh.ICRNL:         1,      // Map CR to NL on input
+		ssh.IEXTEN:        0,      // Disable extended input processing
+		ssh.OPOST:         1,      // Enable output processing
+		ssh.ICANON:        1,      // Enable canonical mode
+		ssh.ISIG:          1,      // Enable signals
+		ssh.ECHOE:         1,      // Echo erase char as BS-SP-BS
+		ssh.ECHOK:         1,      // Echo NL after kill char
 	}
 
-	// Ustaw mniejszy rozmiar terminala dla lepszej kontroli nad buforowaniem
+	// Pobierz aktualny rozmiar terminala
 	fd := int(os.Stdout.Fd())
-	width, height, _ := terminal.GetSize(fd)
+	width, height, err := term.GetSize(fd)
+	if err != nil {
+		width, height = 80, 24 // Domyślne wartości jeśli nie można pobrać
+	}
 
+	// Żądanie PTY z ustalonymi parametrami
 	if err := s.session.RequestPty(termType, height, width, modes); err != nil {
 		return fmt.Errorf("failed to request PTY: %v", err)
 	}
