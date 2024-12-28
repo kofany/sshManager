@@ -1,4 +1,4 @@
-//session_windows.go
+// internal/ssh/session_windows.go
 //go:build windows
 // +build windows
 
@@ -14,8 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/moby/term"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/term"
+	terminal "golang.org/x/term"
 )
 
 func init() {
@@ -39,21 +40,22 @@ const (
 	StateError
 )
 
-// SSHSession reprezentuje aktywną sesję SSH
 type SSHSession struct {
-	client            *ssh.Client
-	session           *ssh.Session
-	state             SessionState
-	lastError         error
-	stdin             *os.File
-	stdout            *os.File
-	stderr            *os.File
-	termWidth         int
-	termHeight        int
-	keepAlive         time.Duration
-	stopChan          chan struct{}
-	stateMutex        sync.RWMutex
-	originalTermState *term.State // Dodane pole także dla Windows
+	client     *ssh.Client
+	session    *ssh.Session
+	state      SessionState
+	lastError  error
+	stdin      *os.File
+	stdout     *os.File
+	stderr     *os.File
+	termWidth  int
+	termHeight int
+
+	keepAlive  time.Duration
+	stopChan   chan struct{}
+	stateMutex sync.RWMutex
+
+	oldState *term.State // stan lokalnego terminala (Windows)
 }
 
 // NewSSHSession tworzy nową sesję SSH
@@ -63,14 +65,11 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 		return nil, fmt.Errorf("failed to create session: %v", err)
 	}
 
-	// Pobierz aktualny rozmiar terminala
+	// Pobieramy rozmiar lokalnego terminala (Windows) przez moby/term
 	fd := int(os.Stdout.Fd())
-	width, height, err := term.GetSize(fd)
-	if err != nil {
-		width, height = 80, 24 // Wartości domyślne
-	}
+	width, height, err := terminal.GetSize(fd)
 
-	s := &SSHSession{
+	return &SSHSession{
 		client:     client,
 		session:    session,
 		state:      StateConnecting,
@@ -81,25 +80,36 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 		termHeight: height,
 		keepAlive:  30 * time.Second,
 		stopChan:   make(chan struct{}),
-	}
-
-	return s, nil
+	}, nil
 }
 
-// ConfigureTerminal konfiguruje terminal dla sesji
+// ConfigureTerminal – żądamy zdalnego PTY i ustawiamy tryb surowy (ECHO=0, ICANON=0)
+// aby strzałki i mysza mogły w pełni działać w aplikacjach curses.
 func (s *SSHSession) ConfigureTerminal(termType string) error {
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-		ssh.VINTR:         3,  // Ctrl+C
-		ssh.VQUIT:         28, // Ctrl+\
-		ssh.VERASE:        127,
-		ssh.VKILL:         21, // Ctrl+U
-		ssh.VEOF:          4,  // Ctrl+D
-		ssh.VWERASE:       23, // Ctrl+W
-		ssh.VLNEXT:        22, // Ctrl+V
-		ssh.VSUSP:         26, // Ctrl+Z
+		ssh.TTY_OP_ISPEED: 38400, // Zwiększone z 14400
+		ssh.TTY_OP_OSPEED: 38400, // Zwiększone z 14400
+		ssh.VINTR:         3,     // Ctrl+C
+		ssh.VQUIT:         28,    // Ctrl+\
+		ssh.VERASE:        127,   // Backspace
+		ssh.VKILL:         21,    // Ctrl+U
+		ssh.VEOF:          4,     // Ctrl+D
+		ssh.VWERASE:       23,    // Ctrl+W
+		ssh.VLNEXT:        22,    // Ctrl+V
+		ssh.VSUSP:         26,    // Ctrl+Z
+		ssh.OCRNL:         0,     // Disable CR to NL mapping
+		ssh.ONLCR:         1,     // Map NL to CR-NL on output
+		ssh.ONLRET:        0,     // Don't output CR
+		ssh.ICRNL:         1,     // Map CR to NL on input
+		ssh.IEXTEN:        1,     // Extended input processing
+		ssh.OPOST:         1,     // Enable output processing
+		ssh.ISIG:          1,     // Enable signals
+	}
+
+	// Wymuszamy xterm-256color dla Windows
+	if termType == "" {
+		termType = "xterm-256color"
 	}
 
 	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
@@ -109,61 +119,40 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	return nil
 }
 
+// StartShell – uruchamia zdalną powłokę (shell) w trybie surowym
 func (s *SSHSession) StartShell() error {
-	// Konfiguracja strumieni we/wy
 	s.session.Stdin = s.stdin
 	s.session.Stdout = s.stdout
 	s.session.Stderr = s.stderr
 
-	// Zapisujemy oryginalny stan terminala
-	var err error
-	s.originalTermState, err = term.GetState(int(os.Stdin.Fd()))
-	if err != nil {
-		return fmt.Errorf("failed to get terminal state: %v", err)
-	}
-
-	// Uruchomienie obsługi sygnałów
+	// Uruchamiamy obsługę sygnałów (SIGINT, SIGTERM, resize)
 	go s.handleSignals()
 
-	// Uruchomienie keepalive jeśli włączone
+	// Opcjonalny keepalive
 	if s.keepAlive > 0 {
 		go s.keepAliveLoop()
 	}
 
-	// Przejście w tryb raw dla terminala
-	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	// Lokalne przejście w tryb raw (Windows)
+	oldState, err := term.SetRawTerminal(s.stdin.Fd())
 	if err != nil {
-		return fmt.Errorf("failed to set raw terminal: %v", err)
+		return fmt.Errorf("failed to set local raw terminal: %v", err)
 	}
+	s.oldState = oldState
 
-	cleanup := func() {
-		// Zatrzymujemy keepalive i sygnały
-		close(s.stopChan)
+	// (Opcjonalnie) alternatywny bufor ekranu (jeśli potrzebny):
+	// fmt.Fprint(s.stdout, "\x1b[?1049h")
 
-		// Resetujemy stan sesji
-		s.setState(StateDisconnected)
-
-		// Dłuższe opóźnienie dla Windows przed przywróceniem stanu
-		time.Sleep(150 * time.Millisecond)
-
-		// Przywracamy stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
-		}
-
-		// Dodatkowe opóźnienie dla Windows po przywróceniu stanu
-		time.Sleep(50 * time.Millisecond)
-	}
-	defer cleanup()
-
-	// Uruchomienie powłoki
+	// Start zdalnego shell-a
 	if err := s.session.Shell(); err != nil {
+		// Jeśli się nie uda, natychmiast przywracamy stan terminala
+		_ = term.RestoreTerminal(s.stdin.Fd(), oldState)
 		return fmt.Errorf("failed to start shell: %v", err)
 	}
 
 	s.setState(StateConnected)
 
-	// Czekanie na zakończenie sesji
+	// Czekamy, aż zdalna powłoka się zakończy
 	if err := s.session.Wait(); err != nil {
 		errStr := err.Error()
 		if errStr != "Process exited with status 1" &&
@@ -174,57 +163,76 @@ func (s *SSHSession) StartShell() error {
 		}
 	}
 
-	// Dodatkowe opóźnienie przed zakończeniem
-	time.Sleep(150 * time.Millisecond)
-
+	// Normalne wyjście
+	s.cleanup()
 	return nil
 }
 
-// handleSignals obsługuje sygnały systemowe
+// cleanup – przywrócenie stanu terminala (Windows) i ewentualnie wyjście z alternatywnego bufora
+func (s *SSHSession) cleanup() {
+	close(s.stopChan)
+	s.setState(StateDisconnected)
+
+	// Przywracamy terminal lokalny
+	if s.oldState != nil {
+		_ = term.RestoreTerminal(s.stdin.Fd(), s.oldState)
+		s.oldState = nil
+	}
+
+	// Wyjście z alternatywnego bufora (jeśli włączony):
+	// fmt.Fprint(s.stdout, "\x1b[?1049l")
+
+	// Można łagodnie wyczyścić ekran:
+	// fmt.Fprint(s.stdout, "\x1b[2J\x1b[H")
+
+	time.Sleep(50 * time.Millisecond)
+}
+
+// handleSignals – obsługa sygnałów i zmiany rozmiaru
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
-	// Windows obsługuje tylko SIGTERM i SIGINT
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
 
-	// Osobna goroutyna do monitorowania rozmiaru terminala w Windows
 	go func() {
-		resizeTicker := time.NewTicker(250 * time.Millisecond)
+		resizeTicker := time.NewTicker(100 * time.Millisecond) // Szybsze sprawdzanie zmian
 		defer resizeTicker.Stop()
 
+		fd := os.Stdin.Fd()
+		if !term.IsTerminal(fd) {
+			return
+		}
+
 		var lastWidth, lastHeight = s.termWidth, s.termHeight
-		var consecutiveErrors int
+		var resizeDebouncer *time.Timer
 
 		for {
 			select {
+			case <-resizeTicker.C:
+				if size, err := term.GetWinsize(fd); err == nil {
+					width, height := int(size.Width), int(size.Height)
+					if width != lastWidth || height != lastHeight {
+						if resizeDebouncer != nil {
+							resizeDebouncer.Stop()
+						}
+
+						// Debouncing zmiany rozmiaru
+						resizeDebouncer = time.AfterFunc(50*time.Millisecond, func() {
+							s.stateMutex.Lock()
+							defer s.stateMutex.Unlock()
+
+							if err := s.session.WindowChange(height, width); err == nil {
+								s.termWidth = width
+								s.termHeight = height
+								lastWidth, lastHeight = width, height
+							}
+						})
+					}
+				}
 			case sig := <-sigChan:
 				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
-					fmt.Println("Received signal, closing session")
 					s.Close()
 					return
-				}
-			case <-resizeTicker.C:
-				width, height, err := term.GetSize(int(os.Stdout.Fd()))
-				if err != nil {
-					consecutiveErrors++
-					if consecutiveErrors > 5 {
-						// Jeśli jest zbyt wiele błędów pod rząd, logujemy to
-						s.setError(fmt.Errorf("terminal size monitoring error: %v", err))
-					}
-					continue
-				}
-				consecutiveErrors = 0
-
-				if width != lastWidth || height != lastHeight {
-					s.stateMutex.Lock()
-					if err := s.session.WindowChange(height, width); err != nil {
-						s.setError(fmt.Errorf("failed to update window size: %v", err))
-					} else {
-						s.termWidth = width
-						s.termHeight = height
-						lastWidth, lastHeight = width, height
-					}
-					s.stateMutex.Unlock()
 				}
 			case <-s.stopChan:
 				return
@@ -233,7 +241,6 @@ func (s *SSHSession) handleSignals() {
 	}()
 }
 
-// keepAliveLoop wysyła pakiety keepalive
 func (s *SSHSession) keepAliveLoop() {
 	ticker := time.NewTicker(s.keepAlive)
 	defer ticker.Stop()
@@ -255,34 +262,32 @@ func (s *SSHSession) keepAliveLoop() {
 
 // Close zamyka sesję
 func (s *SSHSession) Close() error {
-	// Zamknięcie kanału stopChan
 	select {
 	case <-s.stopChan:
-		// Kanał już zamknięty
 	default:
 		close(s.stopChan)
 	}
 
-	var errors []string
+	var errs []string
 
 	if s.session != nil {
 		if err := s.session.Close(); err != nil {
-			errors = append(errors, fmt.Sprintf("session close error: %v", err))
+			errs = append(errs, fmt.Sprintf("session close error: %v", err))
 		}
 		s.session = nil
 	}
 
 	if s.client != nil {
 		if err := s.client.Close(); err != nil {
-			errors = append(errors, fmt.Sprintf("client close error: %v", err))
+			errs = append(errs, fmt.Sprintf("client close error: %v", err))
 		}
 		s.client = nil
 	}
 
 	s.setState(StateDisconnected)
 
-	if len(errors) > 0 {
-		return fmt.Errorf("close errors: %s", strings.Join(errors, "; "))
+	if len(errs) > 0 {
+		return fmt.Errorf("close errors: %s", strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -302,23 +307,34 @@ func (s *SSHSession) setError(err error) {
 	s.state = StateError
 }
 
-// GetState zwraca aktualny stan sesji
 func (s *SSHSession) GetState() SessionState {
 	s.stateMutex.RLock()
 	defer s.stateMutex.RUnlock()
 	return s.state
 }
 
-// GetLastError zwraca ostatni błąd
 func (s *SSHSession) GetLastError() error {
 	s.stateMutex.RLock()
 	defer s.stateMutex.RUnlock()
 	return s.lastError
 }
 
-// SetKeepAlive ustawia interwał keepalive
 func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
 	s.keepAlive = duration
+}
+
+// clearTerminalBuffer – jeśli potrzebujesz wyczyścić ekran przed wyjściem
+func (s *SSHSession) clearTerminalBuffer() {
+	seq := []string{
+		"\x1b[?25l", // Ukryj kursor
+		"\x1b[2J",   // Wyczyść cały ekran
+		"\x1b[H",    // Przesuń kursor na początek
+		"\x1b[?25h", // Pokaż kursor
+	}
+	for _, esc := range seq {
+		fmt.Fprint(s.stdout, esc)
+		time.Sleep(10 * time.Millisecond)
+	}
 }
