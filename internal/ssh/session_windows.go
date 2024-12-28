@@ -9,13 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/terminal"
 	"golang.org/x/term"
 )
 
@@ -77,23 +77,22 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 }
 
 func (s *SSHSession) ConfigureTerminal(termType string) error {
+	// Dla Windows wymuszamy konkretne ustawienia terminala
+	if runtime.GOOS == "windows" {
+		termType = "xterm-256color"
+	}
+
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 38400,
-		ssh.TTY_OP_OSPEED: 38400,
+		ssh.TTY_OP_ISPEED: 115200, // Zwiększona prędkość
+		ssh.TTY_OP_OSPEED: 115200,
 	}
 
-	// Specjalne ustawienia dla Windows
-	if runtime.GOOS == "windows" {
-		if err := s.session.Setenv("COLUMNS", strconv.Itoa(s.termWidth)); err != nil {
-			return fmt.Errorf("failed to set COLUMNS: %v", err)
-		}
-		if err := s.session.Setenv("LINES", strconv.Itoa(s.termHeight)); err != nil {
-			return fmt.Errorf("failed to set LINES: %v", err)
-		}
-	}
+	// Ustaw mniejszy rozmiar terminala dla lepszej kontroli nad buforowaniem
+	fd := int(os.Stdout.Fd())
+	width, height, _ := terminal.GetSize(fd)
 
-	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
+	if err := s.session.RequestPty(termType, height, width, modes); err != nil {
 		return fmt.Errorf("failed to request PTY: %v", err)
 	}
 
