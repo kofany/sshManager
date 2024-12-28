@@ -104,25 +104,16 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	// Pełna konfiguracja trybów terminala
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 115200,
-		ssh.TTY_OP_OSPEED: 115200,
-		ssh.VINTR:         3,   // Ctrl+C
-		ssh.VQUIT:         28,  // Ctrl+\
-		ssh.VERASE:        127, // Backspace
-		ssh.VKILL:         21,  // Ctrl+U
-		ssh.VEOF:          4,   // Ctrl+D
-		ssh.VWERASE:       23,  // Ctrl+W
-		ssh.VLNEXT:        22,  // Ctrl+V
-		ssh.VSUSP:         26,  // Ctrl+Z
-		ssh.IGNPAR:        1,   // Ignoruj błędy parzystości
-		ssh.ICRNL:         1,   // Tłumacz CR na NL
-		ssh.IEXTEN:        1,   // Rozszerzone przetwarzanie wejścia
-		ssh.ECHOKE:        1,   // Kill echo
-		ssh.ECHOCTL:       1,   // Echo control chars
-		ssh.ISIG:          1,   // Enable signals
-		ssh.ICANON:        1,   // Enable canonical mode
-		ssh.OPOST:         1,   // Enable output processing
-		ssh.CS8:           1,   // 8 bit chars
+		ssh.TTY_OP_ISPEED: 34400,
+		ssh.TTY_OP_OSPEED: 34400,
+		ssh.VINTR:         3,  // Ctrl+C
+		ssh.VQUIT:         28, // Ctrl+\
+		ssh.VERASE:        127,
+		ssh.VKILL:         21, // Ctrl+U
+		ssh.VEOF:          4,  // Ctrl+D
+		ssh.VWERASE:       23, // Ctrl+W
+		ssh.VLNEXT:        22, // Ctrl+V
+		ssh.VSUSP:         26, // Ctrl+Z
 	}
 
 	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
