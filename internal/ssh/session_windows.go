@@ -204,11 +204,9 @@ func (s *SSHSession) StartShell() error {
 // handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
-	// Windows obsługuje tylko SIGTERM i SIGINT
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
 
-	// Osobna goroutyna do monitorowania rozmiaru terminala w Windows
 	go func() {
 		resizeTicker := time.NewTicker(250 * time.Millisecond)
 		defer resizeTicker.Stop()
@@ -229,7 +227,6 @@ func (s *SSHSession) handleSignals() {
 				if err != nil {
 					consecutiveErrors++
 					if consecutiveErrors > 5 {
-						// Jeśli jest zbyt wiele błędów pod rząd, logujemy to
 						s.setError(fmt.Errorf("terminal size monitoring error: %v", err))
 					}
 					continue
@@ -238,12 +235,18 @@ func (s *SSHSession) handleSignals() {
 
 				if width != lastWidth || height != lastHeight {
 					s.stateMutex.Lock()
+					// Wyślij sekwencję czyszczącą przed zmianą rozmiaru
+					fmt.Fprint(s.stdout, "\x1b[2J\x1b[H")
+
 					if err := s.session.WindowChange(height, width); err != nil {
 						s.setError(fmt.Errorf("failed to update window size: %v", err))
 					} else {
 						s.termWidth = width
 						s.termHeight = height
 						lastWidth, lastHeight = width, height
+
+						// Wymuś pełne odświeżenie po zmianie rozmiaru
+						fmt.Fprint(s.stdout, "\x1b[?1049h\x1b[2J\x1b[H")
 					}
 					s.stateMutex.Unlock()
 				}
