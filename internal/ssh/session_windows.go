@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +17,17 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
+
+func init() {
+	if runtime.GOOS == "windows" {
+		// Spróbuj załadować ConPTY
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		if proc := kernel32.NewProc("CreatePseudoConsole"); proc != nil {
+			// ConPTY jest dostępne, możemy użyć lepszej emulacji terminala
+			os.Setenv("TERM", "xterm-256color")
+		}
+	}
+}
 
 // SessionState reprezentuje stan sesji SSH
 type SessionState int
@@ -78,23 +90,39 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 func (s *SSHSession) ConfigureTerminal(termType string) error {
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 38400, // Zwiększone z 14400
-		ssh.TTY_OP_OSPEED: 38400, // Zwiększone z 14400
-		ssh.VINTR:         3,     // Ctrl+C
-		ssh.VQUIT:         28,    // Ctrl+\
-		ssh.VERASE:        127,   // Backspace
-		ssh.VKILL:         21,    // Ctrl+U
-		ssh.VEOF:          4,     // Ctrl+D
-		ssh.VWERASE:       23,    // Ctrl+W
-		ssh.VLNEXT:        22,    // Ctrl+V
-		ssh.VSUSP:         26,    // Ctrl+Z
+		ssh.TTY_OP_ISPEED: 38400,
+		ssh.TTY_OP_OSPEED: 38400,
+		ssh.VINTR:         3,   // Ctrl+C
+		ssh.VQUIT:         28,  // Ctrl+\
+		ssh.VERASE:        127, // Backspace
+		ssh.VKILL:         21,  // Ctrl+U
+		ssh.VEOF:          4,   // Ctrl+D
+		ssh.VWERASE:       23,  // Ctrl+W
+		ssh.VLNEXT:        22,  // Ctrl+V
+		ssh.VSUSP:         26,  // Ctrl+Z
+		ssh.OCRNL:         0,   // Wyłącz mapowanie CR do NL
+		ssh.ONLCR:         1,   // Włącz mapowanie NL do CR-NL przy wyjściu
+		ssh.ONLRET:        0,   // Nie wysyłaj CR
+		ssh.ICRNL:         1,   // Mapuj CR do NL przy wejściu
+		ssh.IEXTEN:        1,   // Rozszerzone przetwarzanie wejścia
+		ssh.OPOST:         1,   // Włącz przetwarzanie wyjścia
+		ssh.ISIG:          1,   // Włącz sygnały
+		ssh.ICANON:        1,   // Tryb kanoniczny
+		ssh.ECHOE:         1,   // Echo erase
+		ssh.ECHOK:         1,   // Echo kill
 	}
 
-	// Dla Windows domyślnie używamy xterm-256color jeśli nie podano typu
+	// Dla Windows zawsze używamy xterm-256color
 	if termType == "" {
 		termType = "xterm-256color"
 	}
 
+	// Przed żądaniem PTY, wyślij sekwencje czyszczące
+	fmt.Fprint(s.stdout, "\x1b[?1049h") // Przełącz na alternatywny bufor
+	fmt.Fprint(s.stdout, "\x1b[2J")     // Wyczyść cały ekran
+	fmt.Fprint(s.stdout, "\x1b[H")      // Przesuń kursor na początek
+
+	// Żądanie PTY z pełnym rozmiarem terminala
 	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
 		return fmt.Errorf("failed to request PTY: %v", err)
 	}
@@ -176,11 +204,9 @@ func (s *SSHSession) StartShell() error {
 // handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
-	// Windows obsługuje tylko SIGTERM i SIGINT
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
 
-	// Osobna goroutyna do monitorowania rozmiaru terminala w Windows
 	go func() {
 		resizeTicker := time.NewTicker(250 * time.Millisecond)
 		defer resizeTicker.Stop()
@@ -201,7 +227,6 @@ func (s *SSHSession) handleSignals() {
 				if err != nil {
 					consecutiveErrors++
 					if consecutiveErrors > 5 {
-						// Jeśli jest zbyt wiele błędów pod rząd, logujemy to
 						s.setError(fmt.Errorf("terminal size monitoring error: %v", err))
 					}
 					continue
@@ -210,12 +235,18 @@ func (s *SSHSession) handleSignals() {
 
 				if width != lastWidth || height != lastHeight {
 					s.stateMutex.Lock()
+					// Wyślij sekwencję czyszczącą przed zmianą rozmiaru
+					fmt.Fprint(s.stdout, "\x1b[2J\x1b[H")
+
 					if err := s.session.WindowChange(height, width); err != nil {
 						s.setError(fmt.Errorf("failed to update window size: %v", err))
 					} else {
 						s.termWidth = width
 						s.termHeight = height
 						lastWidth, lastHeight = width, height
+
+						// Wymuś pełne odświeżenie po zmianie rozmiaru
+						fmt.Fprint(s.stdout, "\x1b[?1049h\x1b[2J\x1b[H")
 					}
 					s.stateMutex.Unlock()
 				}
