@@ -189,48 +189,48 @@ func (s *SSHSession) cleanup() {
 // handleSignals – obsługa sygnałów i zmiany rozmiaru
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
+	// Windows obsługuje tylko SIGTERM i SIGINT
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
 
+	// Osobna goroutyna do monitorowania rozmiaru terminala w Windows
 	go func() {
-		resizeTicker := time.NewTicker(100 * time.Millisecond) // Szybsze sprawdzanie zmian
+		resizeTicker := time.NewTicker(250 * time.Millisecond)
 		defer resizeTicker.Stop()
 
-		fd := os.Stdin.Fd()
-		if !term.IsTerminal(fd) {
-			return
-		}
-
 		var lastWidth, lastHeight = s.termWidth, s.termHeight
-		var resizeDebouncer *time.Timer
+		var consecutiveErrors int
 
 		for {
 			select {
-			case <-resizeTicker.C:
-				if size, err := term.GetWinsize(fd); err == nil {
-					width, height := int(size.Width), int(size.Height)
-					if width != lastWidth || height != lastHeight {
-						if resizeDebouncer != nil {
-							resizeDebouncer.Stop()
-						}
-
-						// Debouncing zmiany rozmiaru
-						resizeDebouncer = time.AfterFunc(50*time.Millisecond, func() {
-							s.stateMutex.Lock()
-							defer s.stateMutex.Unlock()
-
-							if err := s.session.WindowChange(height, width); err == nil {
-								s.termWidth = width
-								s.termHeight = height
-								lastWidth, lastHeight = width, height
-							}
-						})
-					}
-				}
 			case sig := <-sigChan:
 				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
+					fmt.Println("Received signal, closing session")
 					s.Close()
 					return
+				}
+			case <-resizeTicker.C:
+				width, height, err := terminal.GetSize(int(os.Stdout.Fd()))
+				if err != nil {
+					consecutiveErrors++
+					if consecutiveErrors > 5 {
+						// Jeśli jest zbyt wiele błędów pod rząd, logujemy to
+						s.setError(fmt.Errorf("terminal size monitoring error: %v", err))
+					}
+					continue
+				}
+				consecutiveErrors = 0
+
+				if width != lastWidth || height != lastHeight {
+					s.stateMutex.Lock()
+					if err := s.session.WindowChange(height, width); err != nil {
+						s.setError(fmt.Errorf("failed to update window size: %v", err))
+					} else {
+						s.termWidth = width
+						s.termHeight = height
+						lastWidth, lastHeight = width, height
+					}
+					s.stateMutex.Unlock()
 				}
 			case <-s.stopChan:
 				return
