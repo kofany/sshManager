@@ -52,7 +52,7 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 	}
 
 	// Pobieramy rozmiar z stdin (częściej rzeczywisty TTY niż stdout)
-	fd := int(os.Stdin.Fd())
+	fd := int(os.Stdout.Fd())
 	width, height, err := term.GetSize(fd)
 	if err != nil {
 		width, height = 80, 24 // Domyślne w razie błędu
