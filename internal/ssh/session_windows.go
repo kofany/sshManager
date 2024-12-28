@@ -90,16 +90,8 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 func (s *SSHSession) ConfigureTerminal(termType string) error {
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-		ssh.VINTR:         3,  // Ctrl+C
-		ssh.VQUIT:         28, // Ctrl+\
-		ssh.VERASE:        127,
-		ssh.VKILL:         21, // Ctrl+U
-		ssh.VEOF:          4,  // Ctrl+D
-		ssh.VWERASE:       23, // Ctrl+W
-		ssh.VLNEXT:        22, // Ctrl+V
-		ssh.VSUSP:         26, // Ctrl+Z
+		ssh.TTY_OP_ISPEED: 38400,
+		ssh.TTY_OP_OSPEED: 38400,
 	}
 
 	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
