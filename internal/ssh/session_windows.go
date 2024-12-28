@@ -81,21 +81,17 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 		termType = "xterm-256color"
 	}
 
-	// Pełny zestaw flag kontroli terminala
+	// Ustawienia trybu zbliżonego do raw dla zdalnego terminala
+	// (możesz to dostosować w zależności od potrzeb)
 	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,      // Włącz echo
+		ssh.ECHO:          0,      // Wyłącz echo (weechat zwykle sam wyświetla to, co potrzeba)
 		ssh.TTY_OP_ISPEED: 115200, // Szybkość wejścia
 		ssh.TTY_OP_OSPEED: 115200, // Szybkość wyjścia
-		ssh.OCRNL:         0,      // Disable CR to NL mapping
-		ssh.ONLCR:         1,      // Map NL to CR-NL on output
-		ssh.ONLRET:        0,      // Don't output CR
-		ssh.ICRNL:         1,      // Map CR to NL on input
-		ssh.IEXTEN:        0,      // Disable extended input processing
-		ssh.OPOST:         1,      // Enable output processing
-		ssh.ICANON:        1,      // Enable canonical mode
-		ssh.ISIG:          1,      // Enable signals
-		ssh.ECHOE:         1,      // Echo erase char as BS-SP-BS
-		ssh.ECHOK:         1,      // Echo NL after kill char
+		ssh.ONLCR:         1,      // Map NL na CR-NL (zostawione włączone by uniknąć problemów z CR/LF)
+		ssh.ICANON:        0,      // Wyłącz tryb kanoniczny
+		ssh.ISIG:          1,      // Pozostaw włączone sygnały (Ctrl+C, itp.)
+		ssh.IEXTEN:        1,      // Włącz rozszerzone przetwarzanie wejścia
+		ssh.OPOST:         1,      // Pozostaw podstawowe przetwarzanie wyjścia
 	}
 
 	// Pobierz aktualny rozmiar terminala
@@ -134,44 +130,22 @@ func (s *SSHSession) StartShell() error {
 		go s.keepAliveLoop()
 	}
 
-	// Specjalne ustawienia dla Windows
+	// Ustawiamy lokalnie tryb raw
 	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
 	}
 
-	cleanup := func() {
-		// Zatrzymujemy keepalive i sygnały
-		close(s.stopChan)
-
-		// Resetujemy stan sesji
-		s.setState(StateDisconnected)
-
-		// Czyszczenie i przywracanie stanu terminala
-		s.clearTerminalBuffer()
-
-		// Dłuższe opóźnienie dla Windows przed przywróceniem stanu
-		time.Sleep(200 * time.Millisecond)
-
-		// Przywracamy stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
-		}
-
-		// Ostateczne czyszczenie bufora
-		s.clearTerminalBuffer()
-
-		// Dodatkowe opóźnienie dla Windows po przywróceniu stanu
-		time.Sleep(100 * time.Millisecond)
-	}
-	defer cleanup()
-
-	// Inicjalizacja terminala
-	fmt.Fprint(s.stdout, "\x1b[?1049h") // Przełącz na alternatywny bufor
-	fmt.Fprint(s.stdout, "\x1b[?25h")   // Pokaż kursor
+	// Możesz włączyć alternatywny bufor TYLKO jeśli masz pewność,
+	// że nie będzie to kolidować z aplikacjami curses.
+	// Jeśli weechat ma z tym problemy, po prostu wyłącz:
+	// fmt.Fprint(s.stdout, "\x1b[?1049h") // ALTERNATYWNY bufor ekranu
+	// fmt.Fprint(s.stdout, "\x1b[?25h")   // Pokaż kursor
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
+		// Przywracamy stan terminala, jeśli Shell() się nie uruchomi
+		term.Restore(int(os.Stdin.Fd()), rawState)
 		return fmt.Errorf("failed to start shell: %v", err)
 	}
 
@@ -188,10 +162,33 @@ func (s *SSHSession) StartShell() error {
 		}
 	}
 
-	// Dodatkowe opóźnienie przed zakończeniem
-	time.Sleep(200 * time.Millisecond)
-
+	// Zakończenie – przywracamy stan i czyścimy
+	s.cleanup(rawState)
 	return nil
+}
+
+// cleanup przywraca stan terminala i wykonuje niezbędne czyszczenia
+func (s *SSHSession) cleanup(rawState *term.State) {
+	// Zatrzymujemy keepalive i sygnały
+	close(s.stopChan)
+
+	// Resetujemy stan sesji
+	s.setState(StateDisconnected)
+
+	// Przywracamy stan terminala
+	if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
+	}
+
+	// Jeśli użyłeś alternatywnego bufora, wyjdź z niego:
+	// fmt.Fprint(s.stdout, "\x1b[?1049l") // Powrót z alternatywnego bufora
+
+	// Opcjonalnie możesz wykonać łagodne czyszczenie ekranu,
+	// np. tylko "\x1b[2J\x1b[H" – bez scrollback:
+	// fmt.Fprint(s.stdout, "\x1b[2J\x1b[H")
+
+	// Krótkie opóźnienie, by terminal zdążył się zaktualizować
+	time.Sleep(50 * time.Millisecond)
 }
 
 // handleSignals obsługuje sygnały systemowe
@@ -201,6 +198,7 @@ func (s *SSHSession) handleSignals() {
 	defer signal.Stop(sigChan)
 
 	go func() {
+		// Odpytywanie o rozmiar terminala co 100 ms
 		resizeTicker := time.NewTicker(100 * time.Millisecond)
 		defer resizeTicker.Stop()
 
@@ -229,8 +227,9 @@ func (s *SSHSession) handleSignals() {
 						s.stateMutex.Lock()
 						defer s.stateMutex.Unlock()
 
-						// Używamy nowej funkcji zamiast bezpośredniego wysyłania sekwencji
-						s.clearTerminalBuffer()
+						// Usuwamy tu wywołanie s.clearTerminalBuffer()
+						// Pozwalamy aplikacjom curses (np. weechat) samodzielnie
+						// zareagować na zmianę rozmiaru.
 
 						if err := s.session.WindowChange(height, width); err != nil {
 							s.setError(fmt.Errorf("failed to update window size: %v", err))
@@ -241,11 +240,13 @@ func (s *SSHSession) handleSignals() {
 						}
 					})
 				}
+
 			case sig := <-sigChan:
 				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
 					s.Close()
 					return
 				}
+
 			case <-s.stopChan:
 				return
 			}
@@ -275,7 +276,7 @@ func (s *SSHSession) keepAliveLoop() {
 
 // Close zamyka sesję
 func (s *SSHSession) Close() error {
-	// Zamknięcie kanału stopChan
+	// Zamknięcie kanału stopChan (o ile nie jest już zamknięty)
 	select {
 	case <-s.stopChan:
 		// Kanał już zamknięty
@@ -343,22 +344,20 @@ func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	s.keepAlive = duration
 }
 
-// clearTerminalBuffer czyści bufor terminala w bezpieczny sposób
+// clearTerminalBuffer – jeśli jednak chcesz używać, np. tylko przy wyjściu
+// i naprawdę musisz wyczyścić cały ekran:
 func (s *SSHSession) clearTerminalBuffer() {
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-
-	// Sekwencja czyszcząca dla Windows
+	// Używaj tej funkcji oszczędnie.
+	// Standardowe sekwencje czyszczące (bez scrollback 3J):
 	sequences := []string{
 		"\x1b[?25l", // Ukryj kursor
 		"\x1b[2J",   // Wyczyść cały ekran
-		"\x1b[H",    // Przesuń kursor na początek
-		"\x1b[3J",   // Wyczyść przewinięty bufor
+		"\x1b[H",    // Kursor na początek
 		"\x1b[?25h", // Pokaż kursor
 	}
 
 	for _, seq := range sequences {
 		fmt.Fprint(s.stdout, seq)
-		time.Sleep(10 * time.Millisecond) // Małe opóźnienie między sekwencjami
+		time.Sleep(10 * time.Millisecond) // krótkie opóźnienie
 	}
 }
