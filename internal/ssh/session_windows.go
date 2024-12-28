@@ -18,6 +18,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func init() {
+	if runtime.GOOS == "windows" {
+		// Spróbuj załadować ConPTY
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		if proc := kernel32.NewProc("CreatePseudoConsole"); proc != nil {
+			// ConPTY jest dostępne, możemy użyć lepszej emulacji terminala
+			os.Setenv("TERM", "xterm-256color")
+		}
+	}
+}
+
 // SessionState reprezentuje stan sesji SSH
 type SessionState int
 
@@ -86,33 +97,47 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 		termType = "xterm-256color"
 	}
 
-	// Ustawienia TerminalModes: ECHO=0, ICANON=0
-	// Zdalnie wchodzimy w tryb "prawie raw",
-	// co pozwala aplikacjom (np. weechat, vim, tmux) w pełni przejąć klawiaturę i mysz.
+	// Sprawdź czy mamy terminal
+	fd := os.Stdin.Fd()
+	if !term.IsTerminal(fd) {
+		return fmt.Errorf("not a terminal")
+	}
+
+	// Pobierz rozmiar terminala
+	size, err := term.GetWinsize(fd)
+	if err != nil {
+		s.termWidth = 80
+		s.termHeight = 24
+	} else {
+		s.termWidth = int(size.Width)
+		s.termHeight = int(size.Height)
+	}
+
+	// Pełna konfiguracja trybów terminala
 	modes := ssh.TerminalModes{
-		ssh.ECHO:          0, // wyłącz echo na serwerze
-		ssh.ICANON:        0, // wyłącz tryb kanoniczny
-		ssh.ISIG:          1, // włącz sygnały (Ctrl+C, itp.)
-		ssh.IEXTEN:        1,
-		ssh.OPOST:         1,
-		ssh.ONLCR:         1,
+		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 115200,
 		ssh.TTY_OP_OSPEED: 115200,
+		ssh.VINTR:         3,   // Ctrl+C
+		ssh.VQUIT:         28,  // Ctrl+\
+		ssh.VERASE:        127, // Backspace
+		ssh.VKILL:         21,  // Ctrl+U
+		ssh.VEOF:          4,   // Ctrl+D
+		ssh.VWERASE:       23,  // Ctrl+W
+		ssh.VLNEXT:        22,  // Ctrl+V
+		ssh.VSUSP:         26,  // Ctrl+Z
+		ssh.IGNPAR:        1,   // Ignoruj błędy parzystości
+		ssh.ICRNL:         1,   // Tłumacz CR na NL
+		ssh.IEXTEN:        1,   // Rozszerzone przetwarzanie wejścia
+		ssh.ECHOKE:        1,   // Kill echo
+		ssh.ECHOCTL:       1,   // Echo control chars
+		ssh.ISIG:          1,   // Enable signals
+		ssh.ICANON:        1,   // Enable canonical mode
+		ssh.OPOST:         1,   // Enable output processing
+		ssh.CS8:           1,   // 8 bit chars
 	}
 
-	// Ponownie pobierz wymiary (lub użyj s.termWidth / s.termHeight)
-	ws, err := term.GetWinsize(s.stdout.Fd())
-	width, height := s.termWidth, s.termHeight
-	if err == nil && ws != nil {
-		if ws.Width > 0 {
-			width = int(ws.Width)
-		}
-		if ws.Height > 0 {
-			height = int(ws.Height)
-		}
-	}
-
-	if err := s.session.RequestPty(termType, height, width, modes); err != nil {
+	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
 		return fmt.Errorf("failed to request PTY: %v", err)
 	}
 
@@ -195,60 +220,45 @@ func (s *SSHSession) handleSignals() {
 	defer signal.Stop(sigChan)
 
 	go func() {
-		ticker := time.NewTicker(150 * time.Millisecond)
-		defer ticker.Stop()
+		resizeTicker := time.NewTicker(100 * time.Millisecond) // Szybsze sprawdzanie zmian
+		defer resizeTicker.Stop()
 
-		lastW, lastH := s.termWidth, s.termHeight
+		fd := os.Stdin.Fd()
+		if !term.IsTerminal(fd) {
+			return
+		}
+
+		var lastWidth, lastHeight = s.termWidth, s.termHeight
 		var resizeDebouncer *time.Timer
-		var consecutiveErrors int
 
 		for {
 			select {
-			case <-ticker.C:
-				ws, err := term.GetWinsize(s.stdout.Fd())
-				if err != nil {
-					consecutiveErrors++
-					if consecutiveErrors > 5 {
-						s.setError(fmt.Errorf("terminal size monitoring error: %v", err))
-					}
-					continue
-				}
-				consecutiveErrors = 0
-
-				w := int(ws.Width)
-				h := int(ws.Height)
-				if w == 0 {
-					w = 80
-				}
-				if h == 0 {
-					h = 24
-				}
-
-				if w != lastW || h != lastH {
-					if resizeDebouncer != nil {
-						resizeDebouncer.Stop()
-					}
-					resizeDebouncer = time.AfterFunc(50*time.Millisecond, func() {
-						s.stateMutex.Lock()
-						defer s.stateMutex.Unlock()
-
-						if err := s.session.WindowChange(h, w); err != nil {
-							s.setError(fmt.Errorf("failed to update window size: %v", err))
-						} else {
-							s.termWidth = w
-							s.termHeight = h
-							lastW = w
-							lastH = h
+			case <-resizeTicker.C:
+				if size, err := term.GetWinsize(fd); err == nil {
+					width, height := int(size.Width), int(size.Height)
+					if width != lastWidth || height != lastHeight {
+						if resizeDebouncer != nil {
+							resizeDebouncer.Stop()
 						}
-					})
-				}
 
+						// Debouncing zmiany rozmiaru
+						resizeDebouncer = time.AfterFunc(50*time.Millisecond, func() {
+							s.stateMutex.Lock()
+							defer s.stateMutex.Unlock()
+
+							if err := s.session.WindowChange(height, width); err == nil {
+								s.termWidth = width
+								s.termHeight = height
+								lastWidth, lastHeight = width, height
+							}
+						})
+					}
+				}
 			case sig := <-sigChan:
 				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
 					s.Close()
 					return
 				}
-
 			case <-s.stopChan:
 				return
 			}
