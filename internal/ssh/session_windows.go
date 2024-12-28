@@ -76,33 +76,42 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 }
 
 func (s *SSHSession) ConfigureTerminal(termType string) error {
-	// Specjalne ustawienia dla Windows
+	// Dla Windows wymuszamy konkretne ustawienia terminala
 	if runtime.GOOS == "windows" {
-		termType = "xterm-256color" // Wymuszamy bardziej kompatybilny typ terminala
+		// Używamy "vt100" zamiast "xterm-256color" dla lepszej kompatybilności z Windows
+		termType = "vt100"
 	}
 
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 38400, // Zwiększona prędkość dla lepszej responsywności
-		ssh.TTY_OP_OSPEED: 38400,
-		ssh.VINTR:         3,   // Ctrl+C
-		ssh.VQUIT:         28,  // Ctrl+\
-		ssh.VERASE:        127, // Backspace
-		ssh.VKILL:         21,  // Ctrl+U
-		ssh.VEOF:          4,   // Ctrl+D
-		ssh.VWERASE:       23,  // Ctrl+W
-		ssh.VLNEXT:        22,  // Ctrl+V
-		ssh.VSUSP:         26,  // Ctrl+Z
-		ssh.ICRNL:         1,   // Translate CR to NL
-		ssh.ONLCR:         1,   // Map NL to CR-NL
-		ssh.IEXTEN:        0,   // Disable input processing
-		ssh.ECHOCTL:       0,   // Disable control char echo
-		ssh.IXON:          0,   // Disable flow control
-		ssh.IXANY:         0,   // Disable any char to restart output
-		ssh.OPOST:         1,   // Enable output processing
+		ssh.TTY_OP_ISPEED: 115200, // Zwiększona prędkość
+		ssh.TTY_OP_OSPEED: 115200,
+		ssh.VINTR:         3,
+		ssh.VQUIT:         28,
+		ssh.VERASE:        127,
+		ssh.VKILL:         21,
+		ssh.VEOF:          4,
+		ssh.VWERASE:       23,
+		ssh.VLNEXT:        22,
+		ssh.VSUSP:         26,
+		ssh.OCRNL:         0, // Wyłącz konwersję CR -> NL
+		ssh.ONLCR:         0, // Wyłącz konwersję NL -> CR-NL
+		ssh.INLCR:         0, // Wyłącz konwersję NL -> CR
+		ssh.ICRNL:         0, // Wyłącz konwersję CR -> NL dla wejścia
+		ssh.OPOST:         0, // Wyłącz przetwarzanie wyjścia
+		ssh.ISIG:          0, // Wyłącz generowanie sygnałów
+		ssh.IEXTEN:        0, // Wyłącz rozszerzone przetwarzanie wejścia
+		ssh.ECHOE:         0, // Wyłącz echo
+		ssh.ICANON:        0, // Wyłącz tryb kanoniczny
 	}
 
-	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
+	// Ustaw mniejszy rozmiar terminala dla lepszej kontroli nad buforowaniem
+	width, height := s.termWidth, s.termHeight
+	if width > 160 {
+		width = 160 // Ograniczamy szerokość dla lepszej kontroli zawijania
+	}
+
+	if err := s.session.RequestPty(termType, height, width, modes); err != nil {
 		return fmt.Errorf("failed to request PTY: %v", err)
 	}
 
