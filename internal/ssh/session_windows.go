@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -74,20 +75,31 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 	return s, nil
 }
 
-// ConfigureTerminal konfiguruje terminal dla sesji
 func (s *SSHSession) ConfigureTerminal(termType string) error {
+	// Specjalne ustawienia dla Windows
+	if runtime.GOOS == "windows" {
+		termType = "xterm-256color" // Wymuszamy bardziej kompatybilny typ terminala
+	}
+
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-		ssh.VINTR:         3,  // Ctrl+C
-		ssh.VQUIT:         28, // Ctrl+\
-		ssh.VERASE:        127,
-		ssh.VKILL:         21, // Ctrl+U
-		ssh.VEOF:          4,  // Ctrl+D
-		ssh.VWERASE:       23, // Ctrl+W
-		ssh.VLNEXT:        22, // Ctrl+V
-		ssh.VSUSP:         26, // Ctrl+Z
+		ssh.TTY_OP_ISPEED: 38400, // Zwiększona prędkość dla lepszej responsywności
+		ssh.TTY_OP_OSPEED: 38400,
+		ssh.VINTR:         3,   // Ctrl+C
+		ssh.VQUIT:         28,  // Ctrl+\
+		ssh.VERASE:        127, // Backspace
+		ssh.VKILL:         21,  // Ctrl+U
+		ssh.VEOF:          4,   // Ctrl+D
+		ssh.VWERASE:       23,  // Ctrl+W
+		ssh.VLNEXT:        22,  // Ctrl+V
+		ssh.VSUSP:         26,  // Ctrl+Z
+		ssh.ICRNL:         1,   // Translate CR to NL
+		ssh.ONLCR:         1,   // Map NL to CR-NL
+		ssh.IEXTEN:        0,   // Disable input processing
+		ssh.ECHOCTL:       0,   // Disable control char echo
+		ssh.IXON:          0,   // Disable flow control
+		ssh.IXANY:         0,   // Disable any char to restart output
+		ssh.OPOST:         1,   // Enable output processing
 	}
 
 	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
@@ -118,7 +130,7 @@ func (s *SSHSession) StartShell() error {
 		go s.keepAliveLoop()
 	}
 
-	// Przejście w tryb raw dla terminala
+	// Specjalne ustawienia dla Windows
 	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("failed to set raw terminal: %v", err)
@@ -131,18 +143,28 @@ func (s *SSHSession) StartShell() error {
 		// Resetujemy stan sesji
 		s.setState(StateDisconnected)
 
+		// Czyszczenie i przywracanie stanu terminala
+		s.clearTerminalBuffer()
+
 		// Dłuższe opóźnienie dla Windows przed przywróceniem stanu
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 
 		// Przywracamy stan terminala
 		if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
 		}
 
+		// Ostateczne czyszczenie bufora
+		s.clearTerminalBuffer()
+
 		// Dodatkowe opóźnienie dla Windows po przywróceniu stanu
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	defer cleanup()
+
+	// Inicjalizacja terminala
+	fmt.Fprint(s.stdout, "\x1b[?1049h") // Przełącz na alternatywny bufor
+	fmt.Fprint(s.stdout, "\x1b[?25h")   // Pokaż kursor
 
 	// Uruchomienie powłoki
 	if err := s.session.Shell(); err != nil {
@@ -163,7 +185,7 @@ func (s *SSHSession) StartShell() error {
 	}
 
 	// Dodatkowe opóźnienie przed zakończeniem
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	return nil
 }
@@ -171,32 +193,24 @@ func (s *SSHSession) StartShell() error {
 // handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
 	sigChan := make(chan os.Signal, 1)
-	// Windows obsługuje tylko SIGTERM i SIGINT
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
 
-	// Osobna goroutyna do monitorowania rozmiaru terminala w Windows
 	go func() {
-		resizeTicker := time.NewTicker(250 * time.Millisecond)
+		resizeTicker := time.NewTicker(100 * time.Millisecond)
 		defer resizeTicker.Stop()
 
 		var lastWidth, lastHeight = s.termWidth, s.termHeight
+		var resizeDebouncer *time.Timer
 		var consecutiveErrors int
 
 		for {
 			select {
-			case sig := <-sigChan:
-				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
-					fmt.Println("Received signal, closing session")
-					s.Close()
-					return
-				}
 			case <-resizeTicker.C:
 				width, height, err := term.GetSize(int(os.Stdout.Fd()))
 				if err != nil {
 					consecutiveErrors++
 					if consecutiveErrors > 5 {
-						// Jeśli jest zbyt wiele błędów pod rząd, logujemy to
 						s.setError(fmt.Errorf("terminal size monitoring error: %v", err))
 					}
 					continue
@@ -204,15 +218,29 @@ func (s *SSHSession) handleSignals() {
 				consecutiveErrors = 0
 
 				if width != lastWidth || height != lastHeight {
-					s.stateMutex.Lock()
-					if err := s.session.WindowChange(height, width); err != nil {
-						s.setError(fmt.Errorf("failed to update window size: %v", err))
-					} else {
-						s.termWidth = width
-						s.termHeight = height
-						lastWidth, lastHeight = width, height
+					if resizeDebouncer != nil {
+						resizeDebouncer.Stop()
 					}
-					s.stateMutex.Unlock()
+					resizeDebouncer = time.AfterFunc(50*time.Millisecond, func() {
+						s.stateMutex.Lock()
+						defer s.stateMutex.Unlock()
+
+						// Używamy nowej funkcji zamiast bezpośredniego wysyłania sekwencji
+						s.clearTerminalBuffer()
+
+						if err := s.session.WindowChange(height, width); err != nil {
+							s.setError(fmt.Errorf("failed to update window size: %v", err))
+						} else {
+							s.termWidth = width
+							s.termHeight = height
+							lastWidth, lastHeight = width, height
+						}
+					})
+				}
+			case sig := <-sigChan:
+				if sig == syscall.SIGTERM || sig == syscall.SIGINT {
+					s.Close()
+					return
 				}
 			case <-s.stopChan:
 				return
@@ -309,4 +337,24 @@ func (s *SSHSession) SetKeepAlive(duration time.Duration) {
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
 	s.keepAlive = duration
+}
+
+// clearTerminalBuffer czyści bufor terminala w bezpieczny sposób
+func (s *SSHSession) clearTerminalBuffer() {
+	s.stateMutex.Lock()
+	defer s.stateMutex.Unlock()
+
+	// Sekwencja czyszcząca dla Windows
+	sequences := []string{
+		"\x1b[?25l", // Ukryj kursor
+		"\x1b[2J",   // Wyczyść cały ekran
+		"\x1b[H",    // Przesuń kursor na początek
+		"\x1b[3J",   // Wyczyść przewinięty bufor
+		"\x1b[?25h", // Pokaż kursor
+	}
+
+	for _, seq := range sequences {
+		fmt.Fprint(s.stdout, seq)
+		time.Sleep(10 * time.Millisecond) // Małe opóźnienie między sekwencjami
+	}
 }
