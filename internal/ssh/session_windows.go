@@ -16,6 +16,7 @@ import (
 
 	"github.com/moby/term"
 	"golang.org/x/crypto/ssh"
+	terminal "golang.org/x/term"
 )
 
 func init() {
@@ -65,16 +66,8 @@ func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
 	}
 
 	// Pobieramy rozmiar lokalnego terminala (Windows) przez moby/term
-	ws, err := term.GetWinsize(os.Stdout.Fd())
-	width, height := 80, 24
-	if err == nil {
-		if ws.Width > 0 {
-			width = int(ws.Width)
-		}
-		if ws.Height > 0 {
-			height = int(ws.Height)
-		}
-	}
+	fd := int(os.Stdout.Fd())
+	width, height, err := terminal.GetSize(fd)
 
 	return &SSHSession{
 		client:     client,
@@ -104,14 +97,9 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	}
 
 	// Pobierz rozmiar terminala
-	size, err := term.GetWinsize(fd)
-	if err != nil {
-		s.termWidth = 80
-		s.termHeight = 24
-	} else {
-		s.termWidth = int(size.Width)
-		s.termHeight = int(size.Height)
-	}
+	size, _ := term.GetWinsize(fd)
+	s.termWidth = int(size.Width)
+	s.termHeight = int(size.Height)
 
 	// Pełna konfiguracja trybów terminala
 	modes := ssh.TerminalModes{
