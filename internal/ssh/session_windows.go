@@ -95,12 +95,6 @@ func (s *SSHSession) ConfigureTerminal(termType string) error {
 	if !term.IsTerminal(fd) {
 		return fmt.Errorf("not a terminal")
 	}
-
-	// Pobierz rozmiar terminala
-	size, _ := term.GetWinsize(fd)
-	s.termWidth = int(size.Width)
-	s.termHeight = int(size.Height)
-
 	// Pełna konfiguracja trybów terminala
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
