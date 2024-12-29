@@ -281,15 +281,3 @@ func (s *SSHSession) GetState() SessionState {
 	defer s.stateMutex.RUnlock()
 	return s.state
 }
-
-func (s *SSHSession) GetLastError() error {
-	s.stateMutex.RLock()
-	defer s.stateMutex.RUnlock()
-	return s.lastError
-}
-
-func (s *SSHSession) SetKeepAlive(duration time.Duration) {
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-	s.keepAlive = duration
-}

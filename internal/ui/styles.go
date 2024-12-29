@@ -194,19 +194,3 @@ var (
 	SelectedFileStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FF1493"))
 )
-
-// GetMaxWidth zwraca maksymalną szerokość tekstu w slice'u
-func GetMaxWidth(items []string) int {
-	maxWidth := 0
-	for _, item := range items {
-		if w := lipgloss.Width(item); w > maxWidth {
-			maxWidth = w
-		}
-	}
-	return maxWidth
-}
-
-// CenterText centruje tekst w danej szerokości
-func CenterText(text string, width int) string {
-	return lipgloss.PlaceHorizontal(width, lipgloss.Center, text)
-}

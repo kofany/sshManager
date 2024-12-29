@@ -289,17 +289,3 @@ func (s *SSHSession) GetState() SessionState {
 	defer s.stateMutex.RUnlock()
 	return s.state
 }
-
-// GetLastError zwraca ostatni błąd
-func (s *SSHSession) GetLastError() error {
-	s.stateMutex.RLock()
-	defer s.stateMutex.RUnlock()
-	return s.lastError
-}
-
-// SetKeepAlive ustawia interwał keepalive
-func (s *SSHSession) SetKeepAlive(duration time.Duration) {
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-	s.keepAlive = duration
-}
