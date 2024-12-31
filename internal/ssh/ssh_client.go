@@ -32,6 +32,13 @@ type HostKeyVerificationRequired struct {
 
 const (
 	knownHostsFileName = "known_hosts"
+	KeyAlgoRSA         = "ssh-rsa"
+	KeyAlgoRSASHA2256  = "rsa-sha2-256"
+	KeyAlgoRSASHA2512  = "rsa-sha2-512"
+	KeyAlgoECDSA256    = "ecdsa-sha2-nistp256"
+	KeyAlgoECDSA384    = "ecdsa-sha2-nistp384"
+	KeyAlgoECDSA521    = "ecdsa-sha2-nistp521"
+	KeyAlgoED25519     = "ssh-ed25519"
 )
 
 // getAppKnownHostsPath zwraca ścieżkę do naszego pliku known_hosts
@@ -150,6 +157,7 @@ func (s *SSHClient) Connect(host *models.Host, authData string) error {
 	// Konfiguracja autoryzacji
 	var authMethod ssh.AuthMethod
 	if host.PasswordID < 0 {
+		// Obsługa klucza SSH
 		key, err := os.ReadFile(authData)
 		if err != nil {
 			return fmt.Errorf("failed to read SSH key: %v", err)
@@ -160,6 +168,7 @@ func (s *SSHClient) Connect(host *models.Host, authData string) error {
 		}
 		authMethod = ssh.PublicKeys(signer)
 	} else {
+		// Obsługa hasła
 		authMethod = ssh.Password(authData)
 	}
 
@@ -184,7 +193,7 @@ func (s *SSHClient) Connect(host *models.Host, authData string) error {
 				}
 			}
 
-			// Jeśli klucz nie jest znany, zapisz informacje do weryfikacji
+			// Jeśli klucz nie jest znany lub wystąpił błąd, zapisz informacje do weryfikacji
 			verificationRequired = &HostKeyVerificationRequired{
 				IP:          host.IP,
 				Port:        host.Port,
@@ -196,23 +205,65 @@ func (s *SSHClient) Connect(host *models.Host, authData string) error {
 			return verificationRequired
 		},
 		Timeout: 3 * time.Second,
+		// Kompletna lista obsługiwanych algorytmów
 		HostKeyAlgorithms: []string{
-			ssh.KeyAlgoECDSA256,
-			ssh.KeyAlgoECDSA384,
-			ssh.KeyAlgoECDSA521,
-			ssh.KeyAlgoED25519,
-			ssh.KeyAlgoRSA,
+			KeyAlgoECDSA256,
+			KeyAlgoECDSA384,
+			KeyAlgoECDSA521,
+			KeyAlgoED25519,
+			KeyAlgoRSA,
+			KeyAlgoRSASHA2256,
+			KeyAlgoRSASHA2512,
+		},
+		// Dodajemy konfigurację cipherów i KEX
+		Config: ssh.Config{
+			Ciphers: []string{
+				"aes128-gcm@openssh.com",
+				"aes256-gcm@openssh.com",
+				"chacha20-poly1305@openssh.com",
+				"aes128-ctr",
+				"aes192-ctr",
+				"aes256-ctr",
+			},
+			KeyExchanges: []string{
+				"curve25519-sha256@libssh.org",
+				"ecdh-sha2-nistp256",
+				"ecdh-sha2-nistp384",
+				"ecdh-sha2-nistp521",
+				"diffie-hellman-group14-sha256",
+				"diffie-hellman-group16-sha512",
+			},
 		},
 	}
 
+	// Próba nawiązania połączenia
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", host.IP, host.Port), config)
 	if err != nil {
+		// Jeśli wymagana jest weryfikacja klucza hosta
 		if verificationRequired != nil {
 			return verificationRequired
 		}
-		return fmt.Errorf("failed to connect: %v", err)
+
+		// Szczegółowa diagnostyka błędów
+		switch {
+		case strings.Contains(err.Error(), "no common algorithm"):
+			return fmt.Errorf("SSH handshake failed: no compatible algorithms found.\n"+
+				"Server offered different algorithms than what we support.\n"+
+				"Original error: %v", err)
+		case strings.Contains(err.Error(), "connection refused"):
+			return fmt.Errorf("connection refused: the SSH server is not accepting connections on %s:%s", host.IP, host.Port)
+		case strings.Contains(err.Error(), "i/o timeout"):
+			return fmt.Errorf("connection timed out: could not reach %s:%s within %v", host.IP, host.Port, config.Timeout)
+		case strings.Contains(err.Error(), "unable to authenticate"):
+			return fmt.Errorf("authentication failed: invalid credentials for user %s", host.Login)
+		case strings.Contains(err.Error(), "handshake failed"):
+			return fmt.Errorf("SSH handshake failed: %v\nPlease check if the server supports modern SSH protocols", err)
+		default:
+			return fmt.Errorf("failed to establish SSH connection: %v", err)
+		}
 	}
 
+	// Utworzenie nowej sesji
 	session, err := NewSSHSession(client)
 	if err != nil {
 		client.Close()
