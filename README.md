@@ -37,7 +37,7 @@ go build -o sshm
 
 ### Basic Navigation
 
-- `↑/↓` or `k/j` - Navigate through lists
+- `↑/↓` or `w/s` - Navigate through lists
 - `Tab` - Switch between panels
 - `ESC` - Go back/Cancel
 - `q` - Quit application
