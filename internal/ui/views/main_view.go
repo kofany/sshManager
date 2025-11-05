@@ -200,67 +200,33 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         // Handle mouse events for main view
         switch msg.Type {
         case tea.MouseLeft:
-            // Handle clicks on host list (approximate area)
-            hostListStartY := 4 // Approximate start of host list
-            hostListHeight := v.height - 10 // Approximate height
-            if msg.Y >= hostListStartY && msg.Y < hostListStartY+hostListHeight && msg.X < v.width/2 {
-                clickedIndex := msg.Y - hostListStartY
-                if clickedIndex >= 0 && clickedIndex < len(v.hosts) {
-                    v.selectedIndex = clickedIndex
-                    v.errMsg = ""
-                    // Double click detection would require tracking last click time
-                    // For now, single click to select, Enter to connect
-                }
-            }
+            // Handle clicks on host list with accurate positioning
+            // The host panel has: title (1 line), newline (1 line), then host entries
+            // Each host entry starts with \n, so first actual host is at line 3 (0-indexed)
+            panelStartY := 3 // Account for title and initial newlines
+            panelWidth := 47 // Approximate width of host panel (45 content + borders)
             
-            // Handle clicks on buttons (simplified - you could make this more precise)
-            buttonY := v.height - 3
-            if msg.Y == buttonY {
-                if msg.X >= 2 && msg.X <= 10 { // Connect button area
-                    if len(v.hosts) > 0 && !v.connecting {
-                        return v.handleConnect()
-                    }
-                } else if msg.X >= 12 && msg.X <= 20 { // Edit button area
-                    if v.connecting || len(v.hosts) == 0 {
-                        return v, nil
-                    }
-                    editView := NewEditView(v.model)
-                    editView.currentHost = &v.hosts[v.selectedIndex]
-                    editView.editingHost = true
-                    editView.editing = true
-                    editView.mode = modeNormal
-                    editView.initializeHostInputs()
-                    return editView, nil
-                } else if msg.X >= 22 && msg.X <= 30 { // Transfer button area
-                    if v.connecting || len(v.hosts) == 0 {
-                        return v, nil
-                    }
-                    return v.handleTransfer()
-                } else if msg.X >= 32 && msg.X <= 40 { // Delete button area
-                    if v.connecting || len(v.hosts) == 0 {
-                        return v, nil
-                    }
-                    return v.handleDelete()
+            if msg.Y >= panelStartY && msg.X < panelWidth {
+                // Calculate which host was clicked
+                // Each host entry starts with \n, so we need to count the lines
+                clickedLine := msg.Y - panelStartY
+                if clickedLine >= 0 && clickedLine < len(v.hosts) {
+                    v.selectedIndex = clickedLine
+                    v.errMsg = ""
                 }
             }
             
         case tea.MouseWheelUp:
             // Scroll up in host list
-            if len(v.hosts) > 0 && !v.connecting {
+            if len(v.hosts) > 0 && !v.connecting && v.selectedIndex > 0 {
                 v.selectedIndex--
-                if v.selectedIndex < 0 {
-                    v.selectedIndex = len(v.hosts) - 1
-                }
                 v.errMsg = ""
             }
             
         case tea.MouseWheelDown:
             // Scroll down in host list
-            if len(v.hosts) > 0 && !v.connecting {
+            if len(v.hosts) > 0 && !v.connecting && v.selectedIndex < len(v.hosts)-1 {
                 v.selectedIndex++
-                if v.selectedIndex >= len(v.hosts) {
-                    v.selectedIndex = 0
-                }
                 v.errMsg = ""
             }
         }

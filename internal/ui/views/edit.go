@@ -429,13 +429,14 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         case tea.MouseLeft:
             // Handle clicks on form fields (simplified positioning)
             if v.mode == modeNormal && v.editingHost {
-                // Approximate positions for host edit fields
+                // Accurate positions for host edit fields
+                // Layout: title (2 lines), then each field: label (1 line) + input (1 line) + blank (1 line)
                 fieldPositions := []struct{y, x, width, fieldIndex int}{
-                    {4, 12, v.width - 20, 0}, // Name field
-                    {7, 12, v.width - 20, 1}, // Description field  
-                    {10, 12, v.width - 20, 2}, // Login field
-                    {13, 12, v.width - 20, 3}, // IP/Host field
-                    {16, 12, v.width - 20, 4}, // Port field
+                    {4, 4, v.width - 8, 0}, // Name field (starts after title + 2 lines)
+                    {7, 4, v.width - 8, 1}, // Description field (3 lines per field)
+                    {10, 4, v.width - 8, 2}, // Login field
+                    {13, 4, v.width - 8, 3}, // IP/Host field
+                    {16, 4, v.width - 8, 4}, // Port field
                 }
                 
                 for _, pos := range fieldPositions {
@@ -452,10 +453,10 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                     }
                 }
             } else if v.mode == modeNormal && !v.editingHost && v.editing {
-                // Password edit fields
+                // Password edit fields with accurate positioning
                 fieldPositions := []struct{y, x, width, fieldIndex int}{
-                    {4, 12, v.width - 20, 0}, // Description field
-                    {7, 12, v.width - 20, 1}, // Password field
+                    {4, 4, v.width - 8, 0}, // Description field
+                    {7, 4, v.width - 8, 1}, // Password field
                 }
                 
                 for _, pos := range fieldPositions {
@@ -472,20 +473,22 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                     }
                 }
             } else if v.mode == modeSelectPassword {
-                // Handle password/selection list clicks
+                // Handle password/selection list clicks with accurate positioning
+                // Layout: title (2 lines), then password list, then potentially SSH keys
                 listStartY := 4
                 if msg.Y >= listStartY {
-                    clickedIndex := msg.Y - listStartY
                     if v.authTypePasswords {
-                        if clickedIndex < len(v.passwordList) {
+                        // In passwords section
+                        clickedIndex := msg.Y - listStartY
+                        if clickedIndex >= 0 && clickedIndex < len(v.passwordList) {
                             v.selectedPasswordIndex = clickedIndex
                             return v, nil
                         }
-                        // Check if clicked on SSH keys section
+                        // Check if clicked on SSH keys section (after passwords + separator)
                         keysStartY := listStartY + len(v.passwordList) + 2
                         if msg.Y >= keysStartY {
                             keyIndex := msg.Y - keysStartY
-                            if keyIndex < len(v.keys) {
+                            if keyIndex >= 0 && keyIndex < len(v.keys) {
                                 v.authTypePasswords = false
                                 v.selectedPasswordIndex = keyIndex
                                 return v, nil
@@ -496,7 +499,7 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         passwordsEndY := listStartY + len(v.passwordList) + 2
                         if msg.Y >= passwordsEndY {
                             keyIndex := msg.Y - passwordsEndY
-                            if keyIndex < len(v.keys) {
+                            if keyIndex >= 0 && keyIndex < len(v.keys) {
                                 v.selectedPasswordIndex = keyIndex
                                 return v, nil
                             }
@@ -504,7 +507,7 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                             // Clicked on passwords section
                             v.authTypePasswords = true
                             passwordIndex := msg.Y - listStartY
-                            if passwordIndex < len(v.passwordList) {
+                            if passwordIndex >= 0 && passwordIndex < len(v.passwordList) {
                                 v.selectedPasswordIndex = passwordIndex
                                 return v, nil
                             }
@@ -512,14 +515,15 @@ func (v *editView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                     }
                 }
             } else if v.mode == modePasswordList || v.mode == modeKeyList {
-                // Handle list clicks
+                // Handle list clicks with accurate positioning
+                // Layout: title (2 lines), then list items
                 listStartY := 4
                 if msg.Y >= listStartY {
                     clickedIndex := msg.Y - listStartY
-                    if v.mode == modePasswordList && clickedIndex < len(v.passwords) {
+                    if v.mode == modePasswordList && clickedIndex >= 0 && clickedIndex < len(v.passwords) {
                         v.selectedItemIndex = clickedIndex
                         return v, nil
-                    } else if v.mode == modeKeyList && clickedIndex < len(v.keys) {
+                    } else if v.mode == modeKeyList && clickedIndex >= 0 && clickedIndex < len(v.keys) {
                         v.selectedItemIndex = clickedIndex
                         return v, nil
                     }

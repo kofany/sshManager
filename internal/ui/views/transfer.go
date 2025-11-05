@@ -1097,15 +1097,18 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 return v, nil
             }
 
-            // Handle panel clicks
+            // Handle panel clicks with accurate positioning
             panelWidth := (min(v.width-40, 160) - 3) / 2
-            panelStartY := 3 // Approximate start of file lists
+            // Panel layout: title (1 line), path (1 line), file list with header
+            // So actual file entries start after panel title + path + table header
+            panelStartY := 4 // Account for title, path, and table header
             panelHeight := v.height - 10 // Approximate height of panels
             
             // Check if click is in left panel (local)
             if msg.Y >= panelStartY && msg.Y < panelStartY+panelHeight && msg.X >= 1 && msg.X < panelWidth {
                 v.localPanel.active = true
                 v.remotePanel.active = false
+                // Calculate clicked index accounting for scroll offset
                 clickedIndex := msg.Y - panelStartY + v.localPanel.scrollOffset
                 if clickedIndex >= 0 && clickedIndex < len(v.localPanel.entries) {
                     v.localPanel.selectedIndex = clickedIndex
@@ -1120,6 +1123,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                msg.X >= separatorPos && msg.X < separatorPos+panelWidth {
                 v.localPanel.active = false
                 v.remotePanel.active = true
+                // Calculate clicked index accounting for scroll offset
                 clickedIndex := msg.Y - panelStartY + v.remotePanel.scrollOffset
                 if clickedIndex >= 0 && clickedIndex < len(v.remotePanel.entries) {
                     v.remotePanel.selectedIndex = clickedIndex
