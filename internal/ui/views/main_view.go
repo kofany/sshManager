@@ -1,807 +1,716 @@
-// main_view.go
-
 package views
 
 import (
-	"fmt"
-	"path/filepath"
-	"sshManager/internal/config"
-	"sshManager/internal/models"
-	"sshManager/internal/sync"
-	"sshManager/internal/ui"
-	"sshManager/internal/ui/components"
-	"sshManager/internal/ui/messages"
-	"strings"
-	"time"
+    "fmt"
+    "path/filepath"
+    "sshManager/internal/config"
+    "sshManager/internal/models"
+    "sshManager/internal/ssh"
+    "sshManager/internal/sync"
+    "sshManager/internal/ui"
+    "sshManager/internal/ui/components"
+    "sshManager/internal/ui/messages"
+    "strings"
+    "time"
 
-	"sshManager/internal/ssh"
-
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
+    tea "github.com/charmbracelet/bubbletea"
+    "github.com/charmbracelet/lipgloss"
 )
 
-type mainView struct {
-	model                     *ui.Model
-	hosts                     []models.Host
-	selectedIndex             int
-	currentDir                string
-	showHostList              bool
-	errMsg                    string
-	status                    string
-	connecting                bool
-	width                     int
-	height                    int
-	escPressed                bool
-	escTimeout                *time.Timer
-	waitingForKeyConfirmation bool
-	hostKeyFingerprint        string
-	pendingConnection         struct {
-		host     *models.Host
-		password string
-	}
-	popup *components.Popup // Dodane nowe pole
-}
-
-type connectError string
-type errMsg string
-
+// Message types
 type hostKeyVerificationMsg struct {
-	IP          string
-	Port        string
-	Fingerprint string
+    IP          string
+    Port        string
+    Fingerprint string
 }
 
 type connectSuccessMsg struct{}
 
-type connectFinishedMsg struct {
-	err error
+type errMsg string
+
+func (e errMsg) Error() string {
+    return string(e)
 }
 
-func (e connectError) Error() string {
-	return string(e)
+// mainView is the redesigned main view with mouse support and consistent styling
+type mainView struct {
+    model          *ui.Model
+    hosts          []models.Host
+    selectedIndex  int
+    width          int
+    height         int
+    regionManager  *components.ClickableRegionManager
+    popup          *components.Popup
+    statusMessage  string
+    errorMessage   string
+    connecting     bool
+    escPressed     bool
+    escTimeout     *time.Timer
+    waitingForKey  bool
+    pendingConn    struct {
+        host     *models.Host
+        password string
+    }
 }
 
+// NewMainView creates a new redesigned main view
 func NewMainView(model *ui.Model) *mainView {
-	return &mainView{
-		model:        model,
-		showHostList: true,
-		hosts:        model.GetHosts(),
-		currentDir:   getHomeDir(),
-		width:        model.GetTerminalWidth(),  // Dodane
-		height:       model.GetTerminalHeight(), // Dodane
-
-		// Inicjalizacja popupów na nil
-		popup: nil,
-	}
+    return &mainView{
+        model:         model,
+        hosts:         model.GetHosts(),
+        width:         model.GetTerminalWidth(),
+        height:        model.GetTerminalHeight(),
+        regionManager: components.NewClickableRegionManager(),
+    }
 }
 
 func (v *mainView) Init() tea.Cmd {
-	return tea.Sequence(
-		tea.EnterAltScreen,
-		tea.ClearScreen,
-	)
+    return tea.Sequence(
+        tea.EnterAltScreen,
+        tea.ClearScreen,
+    )
 }
 
 func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		v.width = msg.Width
-		v.height = msg.Height
-		v.model.UpdateWindowSize(msg.Width, msg.Height)
-		return v, nil
+    switch msg := msg.(type) {
+    case tea.WindowSizeMsg:
+        v.width = msg.Width
+        v.height = msg.Height
+        v.model.UpdateWindowSize(msg.Width, msg.Height)
+        return v, nil
 
-	case hostKeyVerificationMsg:
-		v.popup = components.NewPopup(
-			components.PopupHostKey,
-			"Host Key Verification",
-			fmt.Sprintf("New host key for %s:%s\n\nKey fingerprint:\n%s\n",
-				msg.IP, msg.Port, msg.Fingerprint),
-			70,
-			12,
-			v.width,
-			v.height,
-		)
-		return v, nil
+    case tea.MouseMsg:
+        if msg.Type == tea.MouseLeft {
+            return v.handleMouseClick(msg)
+        }
 
-	case connectSuccessMsg:
-		v.connecting = true
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"SSH",
-			"Connecting...",
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, tea.Quit
+    case hostKeyVerificationMsg:
+        v.popup = components.NewPopup(
+            components.PopupHostKey,
+            "Host Key Verification",
+            fmt.Sprintf("New host key for %s:%s\n\nKey fingerprint:\n%s\n",
+                msg.IP, msg.Port, msg.Fingerprint),
+            70, 12, v.width, v.height,
+        )
+        return v, nil
 
-	case errMsg:
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Error",
-			string(msg),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
+    case connectSuccessMsg:
+        v.connecting = true
+        v.popup = components.NewPopup(
+            components.PopupMessage,
+            "SSH Connection",
+            "Connecting to host...",
+            50, 7, v.width, v.height,
+        )
+        return v, tea.Quit
 
-	case messages.ReloadAppMsg:
-		v.model.SetQuitting(true)
-		return v, tea.Quit
+    case errMsg:
+        v.popup = components.NewPopup(
+            components.PopupMessage,
+            "Error",
+            string(msg),
+            50, 7, v.width, v.height,
+        )
+        return v, nil
 
-	case tea.KeyMsg:
-		// Obsługa klawiszy dla popupu
-		if v.popup != nil {
-			switch msg.String() {
-			case "esc", "enter":
-				if v.popup.Type == components.PopupMessage {
-					v.popup = nil
-					return v, nil
-				}
-				if v.popup.Type == components.PopupSessionEnded {
-					v.popup = nil
-					// Resetujemy stan wejścia
-					return v, v.PostInitialize()
-				}
+    case messages.ReloadAppMsg:
+        v.model.SetQuitting(true)
+        return v, tea.Quit
 
-			case "y", "Y":
-				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
-					v.waitingForKeyConfirmation = false
+    case tea.KeyMsg:
+        // Handle popup keys
+        if v.popup != nil {
+            switch msg.String() {
+            case "esc", "enter":
+                if v.popup.Type == components.PopupMessage || v.popup.Type == components.PopupSessionEnded {
+                    v.popup = nil
+                    return v, nil
+                }
+            case "y", "Y":
+                if v.popup.Type == components.PopupHostKey && v.waitingForKey {
+                    return v.handleHostKeyAcceptance()
+                }
+            case "n", "N":
+                if v.popup.Type == components.PopupHostKey && v.waitingForKey {
+                    v.waitingForKey = false
+                    v.popup = components.NewPopup(
+                        components.PopupMessage,
+                        "Connection Cancelled",
+                        "Host key was not accepted",
+                        50, 7, v.width, v.height,
+                    )
+                    return v, nil
+                }
+            }
+            return v, nil
+        }
 
-					// Tworzymy instancję SSHClient
-					sshClient := ssh.NewSSHClient(v.model.GetPasswords())
-					err := sshClient.ConnectWithAcceptedKey(
-						v.pendingConnection.host,
-						v.pendingConnection.password,
-					)
+        // Handle main view keys
+        switch msg.String() {
+        case "q", "ctrl+c":
+            if !v.connecting {
+                v.model.SetQuitting(true)
+                return v, tea.Quit
+            }
 
-					if err != nil {
-						v.popup = components.NewPopup(
-							components.PopupMessage,
-							"Błąd połączenia",
-							fmt.Sprintf("Failed to connect: %v", err),
-							50,
-							7,
-							v.width,
-							v.height,
-						)
-						return v, nil
-					}
+        case "up", "w":
+            if len(v.hosts) > 0 && !v.connecting {
+                v.selectedIndex--
+                if v.selectedIndex < 0 {
+                    v.selectedIndex = len(v.hosts) - 1
+                }
+            }
 
-					// Zapisujemy klienta SSH w modelu
-					v.model.SetSSHClient(sshClient)
-					v.connecting = true
-					v.popup = components.NewPopup(
-						components.PopupMessage,
-						"SSH",
-						"Connecting...",
-						50,
-						7,
-						v.width,
-						v.height,
-					)
+        case "down", "s":
+            if len(v.hosts) > 0 && !v.connecting {
+                v.selectedIndex++
+                if v.selectedIndex >= len(v.hosts) {
+                    v.selectedIndex = 0
+                }
+            }
 
-					// Teraz kończymy pętlę TUI, aby main.go mogło wykonać ConfigureTerminal() i StartShell()
-					return v, tea.Quit
-				}
-			case "n", "N":
-				if v.popup.Type == components.PopupHostKey && v.waitingForKeyConfirmation {
-					v.waitingForKeyConfirmation = false
-					v.popup = components.NewPopup(
-						components.PopupMessage,
-						"SSH",
-						"Connection cancelled",
-						50,
-						7,
-						v.width,
-						v.height,
-					)
-					return v, nil
-				}
-			}
-			return v, nil
-		}
+        case "enter", "c":
+            if !v.connecting && len(v.hosts) > 0 {
+                return v.handleConnect()
+            }
 
-		// Standardowa obsługa klawiszy nawigacji
-		switch msg.String() {
-		case "q", "ctrl+c":
-			if !v.connecting {
-				v.model.SetQuitting(true)
-				return v, tea.Quit
-			}
-			return v, nil
+        case "e", "f4":
+            if !v.connecting && len(v.hosts) > 0 {
+                editView := NewEditView(v.model)
+                editView.currentHost = &v.hosts[v.selectedIndex]
+                editView.editingHost = true
+                editView.editing = true
+                editView.mode = modeNormal
+                editView.initializeHostInputs()
+                return editView, nil
+            }
 
-		case "up", "w":
-			if len(v.hosts) > 0 && !v.connecting {
-				v.selectedIndex--
-				if v.selectedIndex < 0 {
-					v.selectedIndex = len(v.hosts) - 1
-				}
-				v.errMsg = ""
-			}
+        case "h":
+            if !v.connecting {
+                editView := NewEditView(v.model)
+                editView.editingHost = true
+                editView.editing = true
+                editView.mode = modeNormal
+                editView.initializeHostInputs()
+                return editView, nil
+            }
 
-		case "down", "s":
-			if len(v.hosts) > 0 && !v.connecting {
-				v.selectedIndex++
-				if v.selectedIndex >= len(v.hosts) {
-					v.selectedIndex = 0
-				}
-				v.errMsg = ""
-			}
-		case "enter", "c":
-			if v.connecting || len(v.hosts) == 0 {
-				return v, nil
-			}
-			return v.handleConnect()
-		case "k":
-			if !v.connecting {
-				editView := NewEditView(v.model)
-				editView.mode = modeKeyList
-				editView.editing = true
-				editView.keys = v.model.GetKeys()
-				editView.selectedItemIndex = 0
-				return editView, nil
-			}
-		case "e", "f4":
-			if v.connecting || len(v.hosts) == 0 {
-				return v, nil
-			}
-			editView := NewEditView(v.model)
-			editView.currentHost = &v.hosts[v.selectedIndex]
-			editView.editingHost = true
-			editView.editing = true
-			editView.mode = modeNormal
-			editView.initializeHostInputs()
-			return editView, nil
+        case "p":
+            if !v.connecting {
+                editView := NewEditView(v.model)
+                editView.mode = modePasswordList
+                editView.editing = true
+                editView.passwords = v.model.GetPasswords()
+                editView.selectedItemIndex = 0
+                return editView, nil
+            }
 
-		case "h":
-			if !v.connecting {
-				editView := NewEditView(v.model)
-				editView.editingHost = true
-				editView.editing = true
-				editView.mode = modeNormal
-				editView.initializeHostInputs()
-				return editView, nil
-			}
+        case "k":
+            if !v.connecting {
+                editView := NewEditView(v.model)
+                editView.mode = modeKeyList
+                editView.editing = true
+                editView.keys = v.model.GetKeys()
+                editView.selectedItemIndex = 0
+                return editView, nil
+            }
 
-		case "p":
-			if !v.connecting {
-				editView := NewEditView(v.model)
-				editView.mode = modePasswordList
-				editView.editing = true
-				editView.passwords = v.model.GetPasswords()
-				editView.selectedItemIndex = 0
-				return editView, nil
-			}
+        case "t":
+            if !v.connecting && len(v.hosts) > 0 {
+                return v.handleTransfer()
+            }
 
-		case "t":
-			if v.connecting || len(v.hosts) == 0 {
-				return v, nil
-			}
-			return v.handleTransfer()
+        case "d", "f8":
+            if !v.connecting && len(v.hosts) > 0 {
+                return v.handleDelete()
+            }
 
-		case "d", "f8":
-			if v.connecting || len(v.hosts) == 0 {
-				return v, nil
-			}
-			return v.handleDelete()
-		case " ":
-			if !v.connecting && len(v.hosts) > 0 {
-				ui.SwitchTheme()
-				return v, nil
-			}
-		case "ctrl+r":
-			return v.handleRestoreBackup()
-		case "esc":
-			v.escPressed = true
-			if v.escTimeout != nil {
-				v.escTimeout.Stop()
-			}
-			v.escTimeout = time.NewTimer(500 * time.Millisecond)
-			go func() {
-				<-v.escTimeout.C
-				v.escPressed = false
-			}()
-			return v, nil
-		}
+        case " ":
+            if !v.connecting {
+                ui.SwitchTheme()
+                ui.ApplyCurrentTheme()
+                return v, nil
+            }
 
-		// Obsługa sekwencji ESC
-		if v.escPressed {
-			switch msg.String() {
-			case "4":
-				if len(v.hosts) > 0 && !v.connecting {
-					editView := NewEditView(v.model)
-					editView.currentHost = &v.hosts[v.selectedIndex]
-					editView.editingHost = true
-					editView.editing = true
-					editView.mode = modeNormal
-					editView.initializeHostInputs()
-					return editView, nil
-				}
-				v.escPressed = false
-				return v, nil
-			case "8":
-				if len(v.hosts) > 0 && !v.connecting {
-					return v.handleDelete()
-				}
-				v.escPressed = false
-				return v, nil
-			}
-			v.escPressed = false
-			if v.escTimeout != nil {
-				v.escTimeout.Stop()
-			}
-			return v, nil
-		}
+        case "ctrl+r":
+            return v.handleRestoreBackup()
+        }
+    }
 
-	case connectFinishedMsg:
-		v.connecting = false
-		if msg.err != nil {
-			v.popup = components.NewPopup(
-				components.PopupMessage,
-				"Connection error",
-				fmt.Sprintf("SSH connection failed: %v", msg.err),
-				50,
-				7,
-				v.width,
-				v.height,
-			)
-		} else {
-			v.popup = nil
+    return v, nil
+}
 
-		}
-		return v, nil
+func (v *mainView) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+    // Handle popup clicks
+    if v.popup != nil {
+        // Popup handles its own clicks
+        return v, nil
+    }
 
-	case connectError:
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Connection error",
-			msg.Error(),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		v.connecting = false
-		return v, nil
-	}
+    // Handle list item clicks
+    regionID, activated := v.regionManager.HandleMouseClick(msg)
+    if regionID != "" {
+        // Find the host by ID and select it
+        for i := range v.hosts {
+            if fmt.Sprintf("host-%d", i) == regionID {
+                v.selectedIndex = i
+                if activated {
+                    // Double-click - connect
+                    return v.handleConnect()
+                }
+                break
+            }
+        }
+    }
 
-	return v, nil
+    return v, nil
 }
 
 func (v *mainView) handleConnect() (tea.Model, tea.Cmd) {
-	host := v.hosts[v.selectedIndex]
-	v.model.SetSelectedHost(&host)
+    if v.selectedIndex < 0 || v.selectedIndex >= len(v.hosts) {
+        return v, nil
+    }
 
-	// Zwracamy komendę, która będzie wykonana asynchronicznie
-	return v, func() tea.Msg {
-		var authData string
+    host := v.hosts[v.selectedIndex]
+    v.model.SetSelectedHost(&host)
 
-		// Przygotowanie danych autoryzacji
-		if host.PasswordID < 0 {
-			// Obsługa klucza SSH
-			keyIndex := -(host.PasswordID + 1)
-			keys := v.model.GetKeys()
-			if keyIndex >= len(keys) {
-				return errMsg("Invalid key ID")
-			}
+    return v, func() tea.Msg {
+        var authData string
 
-			key := keys[keyIndex]
-			keyPath, err := key.GetKeyPath()
-			if err != nil {
-				return errMsg(fmt.Sprintf("Failed to get key path: %v", err))
-			}
-			authData = keyPath
-		} else {
-			// Obsługa hasła
-			passwords := v.model.GetPasswords()
-			if host.PasswordID >= len(passwords) {
-				return errMsg("Invalid password ID")
-			}
+        // Handle authentication
+        if host.PasswordID < 0 {
+            // SSH Key
+            keyIndex := -(host.PasswordID + 1)
+            keys := v.model.GetKeys()
+            if keyIndex >= len(keys) {
+                return errMsg("Invalid key ID")
+            }
+            key := keys[keyIndex]
+            keyPath, err := key.GetKeyPath()
+            if err != nil {
+                return errMsg(fmt.Sprintf("Failed to get key path: %v", err))
+            }
+            authData = keyPath
+        } else {
+            // Password
+            passwords := v.model.GetPasswords()
+            if host.PasswordID >= len(passwords) {
+                return errMsg("Invalid password ID")
+            }
+            password := passwords[host.PasswordID]
+            decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
+            if err != nil {
+                return errMsg(fmt.Sprintf("Failed to decrypt password: %v", err))
+            }
+            authData = decryptedPass
+        }
 
-			password := passwords[host.PasswordID]
-			decryptedPass, err := password.GetDecrypted(v.model.GetCipher())
-			if err != nil {
-				return errMsg(fmt.Sprintf("Failed to decrypt password: %v", err))
-			}
-			authData = decryptedPass
-		}
+        // Create SSH client
+        sshClient := ssh.NewSSHClient(v.model.GetPasswords())
+        connectionDone := make(chan error, 1)
+        
+        go func() {
+            connectionDone <- sshClient.Connect(&host, authData)
+        }()
 
-		// Utworzenie klienta SSH
-		sshClient := ssh.NewSSHClient(v.model.GetPasswords())
+        // Wait for connection with timeout
+        select {
+        case err := <-connectionDone:
+            if err != nil {
+                // Check for host key verification
+                if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
+                    fingerprint, err := ssh.GetHostKeyFingerprint(&host)
+                    if err != nil {
+                        return errMsg(fmt.Sprintf("Cannot retrieve key fingerprint: %v", err))
+                    }
 
-		// Kanał do obsługi timeoutu połączenia
-		connectionDone := make(chan error, 1)
-		go func() {
-			connectionDone <- sshClient.Connect(&host, authData)
-		}()
+                    v.waitingForKey = true
+                    v.pendingConn.host = &host
+                    v.pendingConn.password = authData
 
-		// Czekamy na połączenie z timeoutem
-		select {
-		case err := <-connectionDone:
-			if err != nil {
-				// Sprawdzamy czy to błąd weryfikacji klucza
-				if verificationRequired, ok := err.(*ssh.HostKeyVerificationRequired); ok {
-					fingerprint, err := ssh.GetHostKeyFingerprint(&host)
-					if err != nil {
-						return errMsg(fmt.Sprintf("Cannot retrieve key fingerprint: %v", err))
-					}
+                    return hostKeyVerificationMsg{
+                        IP:          verificationRequired.IP,
+                        Port:        verificationRequired.Port,
+                        Fingerprint: fingerprint,
+                    }
+                }
+                return errMsg(fmt.Sprintf("Failed to connect: %v", err))
+            }
 
-					// Ustawiamy stan oczekiwania na potwierdzenie klucza
-					v.waitingForKeyConfirmation = true
-					v.hostKeyFingerprint = fingerprint
-					v.pendingConnection.host = &host
-					v.pendingConnection.password = authData
+            v.model.SetSSHClient(sshClient)
+            return connectSuccessMsg{}
 
-					return hostKeyVerificationMsg{
-						IP:          verificationRequired.IP,
-						Port:        verificationRequired.Port,
-						Fingerprint: fingerprint,
-					}
-				}
-				return errMsg(fmt.Sprintf("Failed to connect: %v", err))
-			}
-
-			// Połączenie udane
-			v.model.SetSSHClient(sshClient)
-
-			// Zwracamy wiadomość o sukcesie po zakończeniu połączenia
-			return connectSuccessMsg{}
-
-		case <-time.After(7 * time.Second):
-			return errMsg("Connection timed out")
-		}
-	}
+        case <-time.After(7 * time.Second):
+            return errMsg("Connection timed out")
+        }
+    }
 }
 
-func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {
-	host := v.hosts[v.selectedIndex]
-	if err := v.model.DeleteHost(host.Name); err != nil {
-		v.errMsg = fmt.Sprintf("Failed to delete host: %v", err)
-	} else {
-		if err := v.model.SaveConfig(); err != nil {
-			v.errMsg = fmt.Sprintf("Failed to save configuration: %v", err)
-			return v, nil
-		}
-		v.hosts = v.model.GetHosts()
-		if v.selectedIndex >= len(v.hosts) {
-			v.selectedIndex = len(v.hosts) - 1
-		}
-		v.status = "Host deleted successfully"
-	}
-	return v, nil
-}
+func (v *mainView) handleHostKeyAcceptance() (tea.Model, tea.Cmd) {
+    v.waitingForKey = false
 
-// handleTransfer pozostaje bez zmian
+    sshClient := ssh.NewSSHClient(v.model.GetPasswords())
+    err := sshClient.ConnectWithAcceptedKey(
+        v.pendingConn.host,
+        v.pendingConn.password,
+    )
 
-func (v *mainView) View() string {
-	// Przygotuj główną zawartość
-	var content strings.Builder
-	content.WriteString(ui.TitleStyle.Render("sshManager ❯ https://sshm.io") + "\n\n")
+    if err != nil {
+        v.popup = components.NewPopup(
+            components.PopupMessage,
+            "Connection Error",
+            fmt.Sprintf("Failed to connect: %v", err),
+            50, 7, v.width, v.height,
+        )
+        return v, nil
+    }
 
-	// Główny layout w stylu MC z dwoma panelami
-	leftPanel := v.renderHostPanel()
-	rightPanel := v.renderDetailsPanel()
+    v.model.SetSSHClient(sshClient)
+    v.connecting = true
+    v.popup = components.NewPopup(
+        components.PopupMessage,
+        "SSH Connection",
+        "Connecting...",
+        50, 7, v.width, v.height,
+    )
 
-	// Połącz panele horyzontalnie
-	mainContent := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		leftPanel,
-		"  +  ", // separator
-		rightPanel,
-	)
-
-	content.WriteString(mainContent + "\n\n")
-
-	// Status bar i Command bar
-	statusAndCmdBar := v.renderStatusBar()
-	content.WriteString(statusAndCmdBar + "\n")
-
-	// Zastosuj styl ramki do całej zawartości
-	framedContent := ui.WindowStyle.Render(content.String())
-
-	// Podstawowy widok
-	baseView := lipgloss.Place(
-		v.width,
-		v.height,
-		lipgloss.Left,
-		lipgloss.Top,
-		framedContent,
-		lipgloss.WithWhitespaceChars(""),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-	)
-
-	// Jeśli jest aktywny popup, renderuj go na wierzchu
-	if v.popup != nil {
-		return lipgloss.Place(
-			v.width,
-			v.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			baseView+"\n"+v.popup.Render(),
-			lipgloss.WithWhitespaceChars(""),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-		)
-	}
-
-	return baseView
-}
-
-func (v *mainView) renderHostPanel() string {
-	style := ui.PanelStyle.Width(45)
-	title := "Available Hosts"
-
-	var content strings.Builder
-	if len(v.hosts) == 0 {
-		content.WriteString(ui.DescriptionStyle.Render("\n  No hosts available\n  Press 'n' to add new host"))
-	} else {
-		for i, host := range v.hosts {
-			prefix := "  "
-			var line string
-
-			// Renderujemy nazwę hosta z użyciem HostStyle
-			hostName := ui.HostStyle.Render(host.Name)
-
-			if i == v.selectedIndex {
-				// Ustawiamy prefix dla zaznaczonego hosta
-				prefix = ui.SuccessStyle.Render("❯ ")
-				// Budujemy linię z użyciem SelectedItemStyle i HostStyle
-				line = ui.SelectedItemStyle.Render(
-					fmt.Sprintf("\n%s%s", prefix, hostName),
-				)
-			} else {
-				// Budujemy linię dla niezaznaczonego hosta z HostStyle
-				line = fmt.Sprintf("\n%s%s", prefix, hostName)
-			}
-			// Dodajemy linię do zawartości
-			content.WriteString(line)
-		}
-	}
-
-	return style.Render(title + "\n" + content.String())
-}
-
-func (v *mainView) renderDetailsPanel() string {
-	style := ui.PanelStyle.Width(45)
-	title := "Host Details"
-
-	var content strings.Builder
-	if len(v.hosts) > 0 {
-		host := v.hosts[v.selectedIndex]
-		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Name:"), ui.Infotext.Render(host.Name)))
-		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Description:"), ui.Infotext.Render(host.Description)))
-		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Login:"), ui.Infotext.Render(host.Login)))
-		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Address:"), ui.Infotext.Render(host.IP)))
-		content.WriteString(fmt.Sprintf("\n  %s %s", ui.LabelStyle.Render("Port:"), ui.Infotext.Render(host.Port)))
-	}
-
-	return style.Render(title + "\n" + content.String())
-}
-
-func (v *mainView) renderStatusBar() string {
-	// Renderowanie paska statusu
-	var status string
-	if v.errMsg != "" {
-		status = ui.ErrorStyle.Render(v.errMsg)
-	} else if v.status != "" {
-		status = ui.SuccessStyle.Render(v.status)
-	} else if v.model.IsConnected() {
-		if host := v.model.GetSelectedHost(); host != nil {
-			status = ui.SuccessStyle.Render(fmt.Sprintf("Connected to: %s", host.Name))
-		}
-	} else {
-		status = ui.DescriptionStyle.Render("To restore data from local backup press: ctrl + r")
-	}
-
-	// Renderowanie tabeli poleceń
-	headers := []string{
-		"Connect", "Navigate", "Edit Host", "Add Host", "Pass",
-		"Transfer", "Delete Host", "List Keys", "Theme", "Quit",
-	}
-	shortcuts := []string{
-		"enter/c", "↑↓/w/s", "e/f4/ESC+4", "h", "p",
-		"t", "d/f8/ESC+8", "k", "space", "q/^c",
-	}
-
-	// Renderowanie wierszy tabeli
-	var TableStyle = func(row, col int) lipgloss.Style {
-		switch {
-		case row == -1: // Nagłówki
-			return lipgloss.NewStyle().
-				Padding(0, 1).
-				Foreground(ui.Subtle).
-				Align(lipgloss.Center)
-		default: // Skróty
-			return lipgloss.NewStyle().
-				Padding(0, 1).
-				Foreground(ui.Special)
-		}
-	}
-
-	cmdTable := table.New().
-		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(ui.StatusBar)).
-		StyleFunc(TableStyle).
-		Headers(headers...).
-		Row(shortcuts...)
-
-	// Połączenie statusu i tabeli w jedną ramkę
-	fullContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		status,            // Pasek statusu
-		cmdTable.Render(), // Tabela poleceń
-	)
-
-	// Dodanie ramki wokół wszystkiego
-	framed := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Render(fullContent)
-
-	return framed
-}
-
-// ReinitializeInput pozostaje bez zmian
-
-func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
-	configPath, err := config.GetDefaultConfigPath()
-	if err != nil {
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Error",
-			fmt.Sprintf("Could not determine config path: %v", err),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
-	}
-
-	keysDir := filepath.Join(filepath.Dir(configPath), config.DefaultKeysDir)
-	apiKey, err := v.model.GetConfig().LoadApiKey(v.model.GetCipher())
-	if err != nil {
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Error",
-			fmt.Sprintf("Failed to load API key: %v", err),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
-	}
-
-	// Najpierw przywróć pliki z backupu
-	if err := sync.RestoreFromBackup(configPath, keysDir); err != nil {
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Error",
-			fmt.Sprintf("Failed to restore backup: %v", err),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
-	}
-
-	// Wypchnij przywrócone pliki do API (używając obecnego szyfru)
-	if err := sync.PushToAPI(apiKey, configPath, keysDir, v.model.GetCipher()); err != nil {
-		v.popup = components.NewPopup(
-			components.PopupMessage,
-			"Error",
-			fmt.Sprintf("Failed to push to API: %v", err),
-			50,
-			7,
-			v.width,
-			v.height,
-		)
-		return v, nil
-	}
-
-	// Informujemy o sukcesie i restartujemy
-	v.popup = components.NewPopup(
-		components.PopupMessage,
-		"Success",
-		"Backup restored and synced with API. Press Enter to restart.",
-		50,
-		7,
-		v.width,
-		v.height,
-	)
-
-	return v, tea.Sequence(
-		func() tea.Msg {
-			return messages.ReloadAppMsg{}
-		},
-	)
+    return v, tea.Quit
 }
 
 func (v *mainView) handleTransfer() (tea.Model, tea.Cmd) {
-	host := v.hosts[v.selectedIndex]
-	v.model.SetSelectedHost(&host)
+    if v.selectedIndex < 0 || v.selectedIndex >= len(v.hosts) {
+        return v, nil
+    }
 
-	var authData string
-	var err error
+    host := v.hosts[v.selectedIndex]
+    v.model.SetSelectedHost(&host)
+    v.model.SetActiveView(ui.ViewTransfer)
 
-	if host.PasswordID < 0 {
-		// Obsługa klucza SSH
-		keyIndex := -(host.PasswordID + 1) // Konwertujemy ujemny indeks na właściwy indeks klucza
-		keys := v.model.GetKeys()
-		if keyIndex >= len(keys) {
-			v.errMsg = "Invalid SSH key ID"
-			return v, nil
-		}
-
-		key := keys[keyIndex]
-		keyPath, err := key.GetKeyPath()
-		if err != nil {
-			v.errMsg = fmt.Sprintf("Failed to get key path: %v", err)
-			return v, nil
-		}
-		authData = keyPath
-	} else {
-		// Obsługa hasła
-		passwords := v.model.GetPasswords()
-		if host.PasswordID >= len(passwords) {
-			v.errMsg = "Invalid password ID"
-			return v, nil
-		}
-		password := passwords[host.PasswordID]
-		authData, err = password.GetDecrypted(v.model.GetCipher())
-		if err != nil {
-			v.errMsg = fmt.Sprintf("Failed to decrypt password: %v", err)
-			return v, nil
-		}
-	}
-
-	transfer := v.model.GetTransfer()
-	if err := transfer.Connect(&host, authData); err != nil {
-		v.errMsg = fmt.Sprintf("Failed to establish SFTP connection: %v", err)
-		return v, nil
-	}
-
-	v.model.SetActiveView(ui.ViewTransfer)
-
-	return v, tea.Sequence(
-		tea.ClearScreen,
-		func() tea.Msg {
-			return tea.WindowSizeMsg{
-				Width:  v.width,
-				Height: v.height,
-			}
-		},
-	)
+    return NewTransferView(v.model), nil
 }
 
+func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {
+    host := v.hosts[v.selectedIndex]
+    if err := v.model.DeleteHost(host.Name); err != nil {
+        v.errorMessage = fmt.Sprintf("Failed to delete host: %v", err)
+    } else {
+        if err := v.model.SaveConfig(); err != nil {
+            v.errorMessage = fmt.Sprintf("Failed to save configuration: %v", err)
+            return v, nil
+        }
+        v.hosts = v.model.GetHosts()
+        if v.selectedIndex >= len(v.hosts) {
+            v.selectedIndex = len(v.hosts) - 1
+        }
+        if v.selectedIndex < 0 {
+            v.selectedIndex = 0
+        }
+        v.statusMessage = "Host deleted successfully"
+    }
+    return v, nil
+}
+
+func (v *mainView) handleRestoreBackup() (tea.Model, tea.Cmd) {
+    configPath, err := config.GetDefaultConfigPath()
+    if err != nil {
+        v.popup = components.NewPopup(
+            components.PopupMessage,
+            "Error",
+            fmt.Sprintf("Could not determine config path: %v", err),
+            50, 7, v.width, v.height,
+        )
+        return v, nil
+    }
+
+    keysDir := filepath.Join(filepath.Dir(configPath), config.DefaultKeysDir)
+    if err := sync.RestoreFromBackup(configPath, keysDir); err != nil {
+        v.popup = components.NewPopup(
+            components.PopupMessage,
+            "Restore Failed",
+            fmt.Sprintf("Could not restore from backup: %v", err),
+            50, 7, v.width, v.height,
+        )
+        return v, nil
+    }
+
+    v.model.GetConfig().Load()
+    v.model.UpdateLists()
+    v.hosts = v.model.GetHosts()
+
+    v.popup = components.NewPopup(
+        components.PopupMessage,
+        "Restore Success",
+        "Configuration restored from backup",
+        50, 7, v.width, v.height,
+    )
+
+    return v, nil
+}
+
+func (v *mainView) View() string {
+    // Header
+    header := v.renderHeader()
+    
+    // Main content area
+    mainContent := v.renderMainContent()
+    
+    // Footer with keybindings
+    footer := v.renderFooter()
+    
+    // Combine all sections
+    content := lipgloss.JoinVertical(
+        lipgloss.Left,
+        header,
+        "",
+        mainContent,
+        "",
+        footer,
+    )
+    
+    // Place in viewport
+    view := lipgloss.Place(
+        v.width,
+        v.height,
+        lipgloss.Left,
+        lipgloss.Top,
+        content,
+    )
+    
+    // Render popup on top if active
+    if v.popup != nil {
+        return lipgloss.Place(
+            v.width,
+            v.height,
+            lipgloss.Center,
+            lipgloss.Center,
+            view+"\n"+v.popup.Render(),
+        )
+    }
+    
+    return view
+}
+
+func (v *mainView) renderHeader() string {
+    title := ui.StyleHeader.
+        Width(v.width).
+        Render("SSH Manager - https://sshm.io")
+    
+    return title
+}
+
+func (v *mainView) renderMainContent() string {
+    if len(v.hosts) == 0 {
+        emptyMsg := lipgloss.JoinVertical(
+            lipgloss.Center,
+            ui.StyleMuted.Render("No SSH hosts configured"),
+            "",
+            ui.StyleInfo.Render("Press 'h' to add a new host"),
+        )
+        
+        container := ui.StyleContainer.
+            Width(v.width - 10).
+            Height(v.height - 15).
+            Align(lipgloss.Center, lipgloss.Center)
+        
+        return container.Render(emptyMsg)
+    }
+    
+    // Calculate layout
+    panelWidth := (v.width - 20) / 2
+    panelHeight := v.height - 15
+    
+    // Left panel: Host list
+    leftPanel := v.renderHostList(panelWidth, panelHeight)
+    
+    // Right panel: Host details
+    rightPanel := v.renderHostDetails(panelWidth, panelHeight)
+    
+    // Join panels horizontally
+    return lipgloss.JoinHorizontal(
+        lipgloss.Top,
+        leftPanel,
+        "  ", // Separator
+        rightPanel,
+    )
+}
+
+func (v *mainView) renderHostList(width, height int) string {
+    // Clear and rebuild clickable regions
+    v.regionManager.ClearRegions()
+    
+    var content strings.Builder
+    
+    // Panel title
+    titleStyle := ui.StylePanelTitleActive
+    if v.connecting {
+        titleStyle = ui.StylePanelTitle
+    }
+    content.WriteString(titleStyle.Width(width - 4).Render("📋 Hosts") + "\n\n")
+    
+    // Render host items
+    currentY := 4 // Start after title
+    maxItems := (height - 6) / 3 // Rough estimate: 3 lines per item
+    
+    for i, host := range v.hosts {
+        if i >= maxItems {
+            break
+        }
+        
+        itemContent := v.renderHostItem(host, i == v.selectedIndex, width-6)
+        content.WriteString(itemContent + "\n")
+        
+        // Register clickable region
+        itemHeight := strings.Count(itemContent, "\n") + 1
+        v.regionManager.AddRegion(components.ClickableRegion{
+            X:      5,
+            Y:      currentY,
+            Width:  width - 6,
+            Height: itemHeight,
+            ID:     fmt.Sprintf("host-%d", i),
+        })
+        
+        currentY += itemHeight + 1
+    }
+    
+    // Wrap in panel
+    panel := ui.StylePanelActive.
+        Width(width).
+        Height(height)
+    
+    return panel.Render(content.String())
+}
+
+func (v *mainView) renderHostItem(host models.Host, isSelected bool, width int) string {
+    var style lipgloss.Style
+    if isSelected {
+        style = ui.StyleCardSelected.Width(width)
+    } else {
+        style = ui.StyleCard.Width(width)
+    }
+    
+    // Build item content
+    icon := "🖥️ "
+    if isSelected {
+        icon = "▶️ "
+    }
+    
+    title := ui.StyleValue.Bold(true).Render(icon + host.Name)
+    addr := ui.StyleMuted.Render(fmt.Sprintf("  %s@%s:%s", host.Login, host.IP, host.Port))
+    desc := ""
+    if host.Description != "" {
+        desc = "\n" + ui.StyleMuted.Render("  "+ui.TruncateText(host.Description, width-6))
+    }
+    
+    itemContent := lipgloss.JoinVertical(
+        lipgloss.Left,
+        title,
+        addr+desc,
+    )
+    
+    return style.Render(itemContent)
+}
+
+func (v *mainView) renderHostDetails(width, height int) string {
+    var content strings.Builder
+    
+    // Panel title
+    content.WriteString(ui.StylePanelTitle.Width(width - 4).Render("ℹ️  Details") + "\n\n")
+    
+    if v.selectedIndex >= 0 && v.selectedIndex < len(v.hosts) {
+        host := v.hosts[v.selectedIndex]
+        
+        // Render details
+        details := []struct {
+            label string
+            value string
+        }{
+            {"Name", host.Name},
+            {"Description", host.Description},
+            {"Login", host.Login},
+            {"Address", host.IP},
+            {"Port", host.Port},
+        }
+        
+        for _, detail := range details {
+            label := ui.StyleLabel.Render(detail.label + ":")
+            value := ui.StyleValue.Render(detail.value)
+            content.WriteString(fmt.Sprintf("%s %s\n", label, value))
+        }
+        
+        // Authentication info
+        content.WriteString("\n")
+        if host.PasswordID < 0 {
+            authType := ui.StyleSuccess.Render("🔑 SSH Key Authentication")
+            content.WriteString(authType + "\n")
+        } else {
+            authType := ui.StyleInfo.Render("🔐 Password Authentication")
+            content.WriteString(authType + "\n")
+        }
+    }
+    
+    // Status messages
+    if v.statusMessage != "" {
+        content.WriteString("\n" + ui.StyleSuccess.Render("✓ " + v.statusMessage))
+    }
+    if v.errorMessage != "" {
+        content.WriteString("\n" + ui.StyleError.Render("✗ " + v.errorMessage))
+    }
+    
+    // Wrap in panel
+    panel := ui.StylePanel.
+        Width(width).
+        Height(height)
+    
+    return panel.Render(content.String())
+}
+
+func (v *mainView) renderFooter() string {
+    // Keybindings
+    bindings := []struct {
+        key  string
+        desc string
+    }{
+        {"↑↓/w/s", "Navigate"},
+        {"Enter/c", "Connect"},
+        {"e/F4", "Edit"},
+        {"h", "New Host"},
+        {"p", "Passwords"},
+        {"k", "Keys"},
+        {"t", "Transfer"},
+        {"d/F8", "Delete"},
+        {"Space", "Theme"},
+        {"Ctrl+R", "Restore"},
+        {"q", "Quit"},
+    }
+    
+    var keys []string
+    for _, b := range bindings {
+        key := ui.StyleKeybinding.Render(b.key)
+        desc := ui.StyleMuted.Render(b.desc)
+        keys = append(keys, fmt.Sprintf("%s %s", key, desc))
+    }
+    
+    footer := ui.StyleFooter.
+        Width(v.width).
+        Render(strings.Join(keys, " │ "))
+    
+    return footer
+}
+
+// ShowSessionEndedPopup shows a popup when SSH session ends
 func (v *mainView) ShowSessionEndedPopup() {
-	v.popup = components.NewPopup(
-		components.PopupSessionEnded, // Dodamy nowy typ popupu
-		"SSH Session Ended",
-		"SSH session has been terminated successfully.\nPress ESC or ENTER twice to continue.",
-		50,
-		7,
-		v.width,
-		v.height,
-	)
+    v.popup = components.NewPopup(
+        components.PopupSessionEnded,
+        "SSH Session Ended",
+        "The SSH session has been closed.\nPress ESC or Enter to continue.",
+        50, 7, v.width, v.height,
+    )
 }
 
-// W main_view.go
+// PostInitialize reinitializes the view after returning from SSH session
 func (v *mainView) PostInitialize() tea.Cmd {
-	return tea.Sequence(
-		tea.ClearScreen,
-		tea.EnterAltScreen,
-		func() tea.Msg {
-			return tea.KeyMsg{
-				Type:  tea.KeyRunes,
-				Runes: []rune{'i'},
-			}
-		},
-	)
+    return tea.Sequence(
+        tea.EnterAltScreen,
+        tea.ClearScreen,
+    )
 }
