@@ -5,287 +5,310 @@
 package ssh
 
 import (
-	"fmt"
-	"os"
-	"os/signal"
-	"strings"
-	"sync"
-	"syscall"
-	"time"
+    "fmt"
+    "os"
+    "os/signal"
+    "strings"
+    "sync"
+    "syscall"
+    "time"
 
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/term"
+    "golang.org/x/crypto/ssh"
+    "golang.org/x/term"
 )
 
 // SessionState reprezentuje stan sesji SSH
 type SessionState int
 
 const (
-	StateDisconnected SessionState = iota
-	StateConnecting
-	StateConnected
-	StateError
+    StateDisconnected SessionState = iota
+    StateConnecting
+    StateConnected
+    StateError
 )
 
 // SSHSession reprezentuje aktywną sesję SSH
 type SSHSession struct {
-	client            *ssh.Client
-	session           *ssh.Session
-	state             SessionState
-	lastError         error
-	stdin             *os.File
-	stdout            *os.File
-	stderr            *os.File
-	termWidth         int
-	termHeight        int
-	keepAlive         time.Duration
-	stopChan          chan struct{}
-	stateMutex        sync.RWMutex
-	originalTermState *term.State
+    client            *ssh.Client
+    session           *ssh.Session
+    state             SessionState
+    lastError         error
+    stdin             *os.File
+    stdout            *os.File
+    stderr            *os.File
+    termWidth         int
+    termHeight        int
+    keepAlive         time.Duration
+    stopChan          chan struct{}
+    stopOnce          sync.Once
+    stateMutex        sync.RWMutex
+    originalTermState *term.State
 }
 
 // NewSSHSession tworzy nową sesję SSH
 func NewSSHSession(client *ssh.Client) (*SSHSession, error) {
-	session, err := client.NewSession()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session: %v", err)
-	}
+    session, err := client.NewSession()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create session: %v", err)
+    }
 
-	// Pobierz aktualny rozmiar terminala
-	fd := int(os.Stdout.Fd())
-	width, height, err := term.GetSize(fd)
-	if err != nil {
-		width, height = 80, 24 // Wartości domyślne
-	}
+    // Pobierz aktualny rozmiar terminala
+    fd := int(os.Stdout.Fd())
+    width, height, err := term.GetSize(fd)
+    if err != nil {
+        width, height = 80, 24 // Wartości domyślne
+    }
 
-	s := &SSHSession{
-		client:     client,
-		session:    session,
-		state:      StateConnecting,
-		stdin:      os.Stdin,
-		stdout:     os.Stdout,
-		stderr:     os.Stderr,
-		termWidth:  width,
-		termHeight: height,
-		keepAlive:  30 * time.Second,
-		stopChan:   make(chan struct{}),
-	}
+    s := &SSHSession{
+        client:     client,
+        session:    session,
+        state:      StateConnecting,
+        stdin:      os.Stdin,
+        stdout:     os.Stdout,
+        stderr:     os.Stderr,
+        termWidth:  width,
+        termHeight: height,
+        keepAlive:  30 * time.Second,
+        stopChan:   make(chan struct{}),
+    }
 
-	return s, nil
+    return s, nil
+}
+
+func (s *SSHSession) signalStop() {
+    s.stopOnce.Do(func() {
+        if s.stopChan != nil {
+            close(s.stopChan)
+        }
+    })
 }
 
 // ConfigureTerminal konfiguruje terminal dla sesji
 func (s *SSHSession) ConfigureTerminal(termType string) error {
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-		ssh.VINTR:         3,  // Ctrl+C
-		ssh.VQUIT:         28, // Ctrl+\
-		ssh.VERASE:        127,
-		ssh.VKILL:         21, // Ctrl+U
-		ssh.VEOF:          4,  // Ctrl+D
-		ssh.VWERASE:       23, // Ctrl+W
-		ssh.VLNEXT:        22, // Ctrl+V
-		ssh.VSUSP:         26, // Ctrl+Z
-	}
+    modes := ssh.TerminalModes{
+        ssh.ECHO:          1,
+        ssh.TTY_OP_ISPEED: 14400,
+        ssh.TTY_OP_OSPEED: 14400,
+        ssh.VINTR:         3,  // Ctrl+C
+        ssh.VQUIT:         28, // Ctrl+\
+        ssh.VERASE:        127,
+        ssh.VKILL:         21, // Ctrl+U
+        ssh.VEOF:          4,  // Ctrl+D
+        ssh.VWERASE:       23, // Ctrl+W
+        ssh.VLNEXT:        22, // Ctrl+V
+        ssh.VSUSP:         26, // Ctrl+Z
+    }
 
-	if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
-		return fmt.Errorf("failed to request PTY: %v", err)
-	}
+    if err := s.session.RequestPty(termType, s.termHeight, s.termWidth, modes); err != nil {
+        return fmt.Errorf("failed to request PTY: %v", err)
+    }
 
-	return nil
+    return nil
 }
 
-func (s *SSHSession) StartShell() error {
-	// Konfiguracja strumieni we/wy
-	s.session.Stdin = s.stdin
-	s.session.Stdout = s.stdout
-	s.session.Stderr = s.stderr
+func (s *SSHSession) StartShell() (err error) {
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Fprintf(os.Stderr, "Recovered from SSH session panic: %v\n", r)
+            switch v := r.(type) {
+            case error:
+                err = fmt.Errorf("session panic recovered: %w", v)
+            default:
+                err = fmt.Errorf("session panic recovered: %v", r)
+            }
+        }
+    }()
 
-	// Zapisujemy oryginalny stan terminala
-	var err error
-	s.originalTermState, err = term.GetState(int(os.Stdin.Fd()))
-	if err != nil {
-		return fmt.Errorf("failed to get terminal state: %v", err)
-	}
+    // Reset sygnału zatrzymania dla nowej sesji
+    s.stopOnce = sync.Once{}
+    s.stopChan = make(chan struct{})
 
-	// Uruchomienie obsługi sygnałów
-	go s.handleSignals()
+    // Konfiguracja strumieni we/wy
+    s.session.Stdin = s.stdin
+    s.session.Stdout = s.stdout
+    s.session.Stderr = s.stderr
 
-	// Uruchomienie keepalive jeśli włączone
-	if s.keepAlive > 0 {
-		go s.keepAliveLoop()
-	}
+    // Zapisujemy oryginalny stan terminala
+    s.originalTermState, err = term.GetState(int(os.Stdin.Fd()))
+    if err != nil {
+        return fmt.Errorf("failed to get terminal state: %v", err)
+    }
 
-	// Przejście w tryb raw dla terminala
-	rawState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return fmt.Errorf("failed to set raw terminal: %v", err)
-	}
+    var rawState *term.State
+    cleanup := func() {
+        s.signalStop()
 
-	cleanup := func() {
-		// Zatrzymujemy keepalive i sygnały
-		close(s.stopChan)
+        s.setState(StateDisconnected)
 
-		// Resetujemy stan sesji
-		s.setState(StateDisconnected)
+        time.Sleep(100 * time.Millisecond)
 
-		// Małe opóźnienie przed przywróceniem stanu
-		time.Sleep(100 * time.Millisecond)
+        stateToRestore := rawState
+        if stateToRestore == nil {
+            stateToRestore = s.originalTermState
+        }
 
-		// Przywracamy stan terminala
-		if err := term.Restore(int(os.Stdin.Fd()), rawState); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", err)
-		}
-	}
-	defer cleanup()
+        if stateToRestore != nil {
+            if restoreErr := term.Restore(int(os.Stdin.Fd()), stateToRestore); restoreErr != nil {
+                fmt.Fprintf(os.Stderr, "Failed to restore terminal state: %v\n", restoreErr)
+            }
+        }
+    }
+    defer cleanup()
 
-	// Uruchomienie powłoki
-	if err := s.session.Shell(); err != nil {
-		return fmt.Errorf("failed to start shell: %v", err)
-	}
+    // Uruchomienie obsługi sygnałów
+    go s.handleSignals()
 
-	s.setState(StateConnected)
+    // Uruchomienie keepalive jeśli włączone
+    if s.keepAlive > 0 {
+        go s.keepAliveLoop()
+    }
 
-	// Czekanie na zakończenie sesji
-	if err := s.session.Wait(); err != nil {
-		errStr := err.Error()
-		if errStr != "Process exited with status 1" &&
-			!strings.Contains(errStr, "exit status") &&
-			!strings.Contains(errStr, "signal: terminated") &&
-			!strings.Contains(errStr, "signal: interrupt") {
-			return fmt.Errorf("session ended with error: %v", err)
-		}
-	}
+    // Przejście w tryb raw dla terminala
+    rawState, err = term.MakeRaw(int(os.Stdin.Fd()))
+    if err != nil {
+        return fmt.Errorf("failed to set raw terminal: %v", err)
+    }
 
-	// Dodatkowe opóźnienie przed zakończeniem
-	time.Sleep(100 * time.Millisecond)
+    // Uruchomienie powłoki
+    if err := s.session.Shell(); err != nil {
+        return fmt.Errorf("failed to start shell: %v", err)
+    }
 
-	return nil
+    s.setState(StateConnected)
+
+    // Czekanie na zakończenie sesji
+    if err := s.session.Wait(); err != nil {
+        errStr := err.Error()
+        if errStr != "Process exited with status 1" &&
+            !strings.Contains(errStr, "exit status") &&
+            !strings.Contains(errStr, "signal: terminated") &&
+            !strings.Contains(errStr, "signal: interrupt") {
+            return fmt.Errorf("session ended with error: %v", err)
+        }
+    }
+
+    // Dodatkowe opóźnienie przed zakończeniem
+    time.Sleep(100 * time.Millisecond)
+
+    return nil
 }
 
 // handleSignals obsługuje sygnały systemowe
 func (s *SSHSession) handleSignals() {
-	sigChan := make(chan os.Signal, 1)
-	// macOS/Linux obsługuje więcej sygnałów, więc dodajemy SIGWINCH
-	signal.Notify(sigChan, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sigChan)
+    sigChan := make(chan os.Signal, 1)
+    // macOS/Linux obsługuje więcej sygnałów, więc dodajemy SIGWINCH
+    signal.Notify(sigChan, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGINT)
+    defer signal.Stop(sigChan)
 
-	for {
-		select {
-		case sig := <-sigChan:
-			switch sig {
-			case syscall.SIGWINCH:
-				if err := s.updateTerminalSize(); err != nil {
-					s.setError(fmt.Errorf("failed to update terminal size: %v", err))
-				}
-			case syscall.SIGTERM, syscall.SIGINT:
-				s.Close()
-				return
-			}
-		case <-s.stopChan:
-			return
-		}
-	}
+    for {
+        select {
+        case sig := <-sigChan:
+            switch sig {
+            case syscall.SIGWINCH:
+                if err := s.updateTerminalSize(); err != nil {
+                    s.setError(fmt.Errorf("failed to update terminal size: %v", err))
+                }
+            case syscall.SIGTERM, syscall.SIGINT:
+                s.Close()
+                return
+            }
+        case <-s.stopChan:
+            return
+        }
+    }
 }
 
 func (s *SSHSession) updateTerminalSize() error {
-	width, height, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
-		return fmt.Errorf("failed to get terminal size: %v", err)
-	}
+    width, height, err := term.GetSize(int(os.Stdout.Fd()))
+    if err != nil {
+        return fmt.Errorf("failed to get terminal size: %v", err)
+    }
 
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
+    s.stateMutex.Lock()
+    defer s.stateMutex.Unlock()
 
-	// Sprawdź czy rozmiar rzeczywiście się zmienił
-	if width == s.termWidth && height == s.termHeight {
-		return nil
-	}
+    // Sprawdź czy rozmiar rzeczywiście się zmienił
+    if width == s.termWidth && height == s.termHeight {
+        return nil
+    }
 
-	if err := s.session.WindowChange(height, width); err != nil {
-		return fmt.Errorf("failed to update window size: %v", err)
-	}
+    if err := s.session.WindowChange(height, width); err != nil {
+        return fmt.Errorf("failed to update window size: %v", err)
+    }
 
-	s.termWidth = width
-	s.termHeight = height
+    s.termWidth = width
+    s.termHeight = height
 
-	return nil
+    return nil
 }
 
 // keepAliveLoop wysyła pakiety keepalive
 func (s *SSHSession) keepAliveLoop() {
-	ticker := time.NewTicker(s.keepAlive)
-	defer ticker.Stop()
+    ticker := time.NewTicker(s.keepAlive)
+    defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			_, _, err := s.client.SendRequest("keepalive@openssh.com", true, nil)
-			if err != nil {
-				s.setError(fmt.Errorf("keepalive failed: %v", err))
-				s.Close()
-				return
-			}
-		case <-s.stopChan:
-			return
-		}
-	}
+    for {
+        select {
+        case <-ticker.C:
+            _, _, err := s.client.SendRequest("keepalive@openssh.com", true, nil)
+            if err != nil {
+                s.setError(fmt.Errorf("keepalive failed: %v", err))
+                s.Close()
+                return
+            }
+        case <-s.stopChan:
+            return
+        }
+    }
 }
 
 // Close zamyka sesję
 func (s *SSHSession) Close() error {
-	// Zamknięcie kanału stopChan
-	select {
-	case <-s.stopChan:
-		// Kanał już zamknięty
-	default:
-		close(s.stopChan)
-	}
+    // Zamknięcie kanału stopChan - używamy sync.Once aby uniknąć paniki
+    s.signalStop()
 
-	var errors []string
+    var errors []string
 
-	if s.session != nil {
-		if err := s.session.Close(); err != nil {
-			errors = append(errors, fmt.Sprintf("session close error: %v", err))
-		}
-		s.session = nil
-	}
+    if s.session != nil {
+        if err := s.session.Close(); err != nil {
+            errors = append(errors, fmt.Sprintf("session close error: %v", err))
+        }
+        s.session = nil
+    }
 
-	if s.client != nil {
-		if err := s.client.Close(); err != nil {
-			errors = append(errors, fmt.Sprintf("client close error: %v", err))
-		}
-		s.client = nil
-	}
+    if s.client != nil {
+        if err := s.client.Close(); err != nil {
+            errors = append(errors, fmt.Sprintf("client close error: %v", err))
+        }
+        s.client = nil
+    }
 
-	s.setState(StateDisconnected)
+    s.setState(StateDisconnected)
 
-	if len(errors) > 0 {
-		return fmt.Errorf("close errors: %s", strings.Join(errors, "; "))
-	}
-	return nil
+    if len(errors) > 0 {
+        return fmt.Errorf("close errors: %s", strings.Join(errors, "; "))
+    }
+    return nil
 }
 
 // setState ustawia stan sesji
 func (s *SSHSession) setState(state SessionState) {
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-	s.state = state
+    s.stateMutex.Lock()
+    defer s.stateMutex.Unlock()
+    s.state = state
 }
 
 // setError ustawia błąd sesji
 func (s *SSHSession) setError(err error) {
-	s.stateMutex.Lock()
-	defer s.stateMutex.Unlock()
-	s.lastError = err
-	s.state = StateError
+    s.stateMutex.Lock()
+    defer s.stateMutex.Unlock()
+    s.lastError = err
+    s.state = StateError
 }
 
 // GetState zwraca aktualny stan sesji
 func (s *SSHSession) GetState() SessionState {
-	s.stateMutex.RLock()
-	defer s.stateMutex.RUnlock()
-	return s.state
+    s.stateMutex.RLock()
+    defer s.stateMutex.RUnlock()
+    return s.state
 }
