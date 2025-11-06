@@ -201,9 +201,10 @@ func (v *mainView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         switch msg.Type {
         case tea.MouseLeft:
             // Handle clicks on host list with accurate positioning
-            // The host panel has: title (1 line), newline (1 line), then host entries
-            // Each host entry starts with \n, so first actual host is at line 3 (0-indexed)
-            panelStartY := 3 // Account for title and initial newlines
+            // Layout breakdown (0-indexed Y): window border (0), padding (1),
+            // title (2), blank line (3), panel border (4), panel title (5), spacer (6).
+            // The first host entry therefore starts at line 7.
+            panelStartY := 7
             panelWidth := 47 // Approximate width of host panel (45 content + borders)
             
             if msg.Y >= panelStartY && msg.X < panelWidth {

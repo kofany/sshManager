@@ -1099,9 +1099,10 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
             // Handle panel clicks with accurate positioning
             panelWidth := (min(v.width-40, 160) - 3) / 2
-            // Panel layout: title (1 line), path (1 line), file list with header
-            // So actual file entries start after panel title + path + table header
-            panelStartY := 4 // Account for title, path, and table header
+            // Layout breakdown (0-indexed Y): window border (0), padding (1),
+            // title (2), blank line (3), panel border (4), path line (5), header (6).
+            // The first file entry therefore starts at line 7.
+            panelStartY := 7
             panelHeight := v.height - 10 // Approximate height of panels
             
             // Check if click is in left panel (local)
