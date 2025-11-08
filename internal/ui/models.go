@@ -1,5 +1,3 @@
-// internal/ui/models.go
-
 package ui
 
 import (
@@ -17,7 +15,7 @@ import (
     "golang.org/x/term"
 )
 
-// KeyMap definiuje skróty klawiszowe
+// KeyMap defines keyboard shortcuts
 type KeyMap struct {
     Up       key.Binding
     Down     key.Binding
@@ -30,7 +28,7 @@ type KeyMap struct {
     Refresh  key.Binding
 }
 
-// DefaultKeyMap zwraca domyślne ustawienia klawiszy
+// DefaultKeyMap returns the default key bindings
 func DefaultKeyMap() KeyMap {
     return KeyMap{
         Up: key.NewBinding(
@@ -72,7 +70,7 @@ func DefaultKeyMap() KeyMap {
     }
 }
 
-// Status reprezentuje stan aplikacji
+// Status represents application status
 type Status struct {
     Message string
     IsError bool
@@ -91,12 +89,12 @@ const (
     ViewPasswordEdit
 )
 
-// Model reprezentuje główny model aplikacji
+// Model represents the main application model
 type Model struct {
     keys           KeyMap
     status         Status
     activeView     View
-    sshClient      *ssh.SSHClient // tylko dla trybu SSH
+    sshClient      *ssh.SSHClient
     transfer       *ssh.FileTransfer
     hosts          []models.Host
     passwords      []models.Password
@@ -109,15 +107,14 @@ type Model struct {
     quitting       bool
     config         *config.Manager
     cipher         *crypto.Cipher
-    Program        *tea.Program // Zmiana z małej litery na wielką
+    Program        *tea.Program
     terminalWidth  int
     terminalHeight int
-    selectedItems  map[string]bool // mapa przechowująca zaznaczone elementy (klucz: ścieżka pliku)
-    localMode      bool            // true jeśli pracujemy bez synchronizacji
-
+    selectedItems  map[string]bool
+    localMode      bool
 }
 
-// Init implementuje tea.Model
+// Init implements tea.Model
 func (m Model) Init() tea.Cmd {
     return textinput.Blink
 }
