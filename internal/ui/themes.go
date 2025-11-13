@@ -509,6 +509,16 @@ var (
 	}
 )
 
+// GetCurrentTheme returns the currently active theme
+func GetCurrentTheme() Theme {
+	return themes[currentThemeIndex]
+}
+
+// NextTheme switches to the next theme
+func NextTheme() {
+	SwitchTheme()
+}
+
 // SwitchTheme przełącza na następny motyw i aktualizuje wszystkie style
 func SwitchTheme() {
 	currentThemeIndex = (currentThemeIndex + 1) % len(themes)

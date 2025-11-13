@@ -15,11 +15,9 @@ import (
 	"sshManager/internal/ui/components"
 	"sshManager/internal/utils"
 
-	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	ltable "github.com/charmbracelet/lipgloss/table"
 )
 
 // Dodaj na początku pliku po importach
@@ -46,8 +44,7 @@ type FileEntry struct {
 	size    int64
 	modTime time.Time
 	isDir   bool
-	mode    os.FileMode // Dodane pole
-
+	mode    os.FileMode
 }
 
 // Panel reprezentuje panel plików (lokalny lub zdalny)
@@ -79,15 +76,16 @@ type transferView struct {
 	showHelp              bool
 	input                 textinput.Model
 	mutex                 sync.Mutex
-	width                 int               // Dodane
-	height                int               // Dodane
-	escPressed            bool              // flaga wskazująca czy ESC został wciśnięty
-	escTimeout            *time.Timer       // timer do resetowania stanu ESC
-	popup                 *components.Popup // Zmieniamy typ na nowy komponent
+	width                 int
+	height                int
+	escPressed            bool
+	escTimeout            *time.Timer
+	popup                 *components.Popup
 	lastClickTime         time.Time
 	lastClickPanelIsLocal bool
 	lastClickIndex        int
 }
+
 type connectionStatusMsg struct {
 	connected bool
 	err       error
@@ -108,7 +106,7 @@ func NewTransferView(model *ui.Model) *transferView {
 			},
 		},
 		remotePanel: Panel{
-			path:   "~/", // Tymczasowa wartość
+			path:   "~/",
 			active: false,
 			entries: []FileEntry{
 				{name: "..", isDir: true},
@@ -129,7 +127,6 @@ func NewTransferView(model *ui.Model) *transferView {
 	// Inicjujemy połączenie SFTP w tle
 	if v.model.GetSelectedHost() != nil {
 		go func() {
-			// Attempt to establish connection
 			err := v.ensureConnected()
 			if err != nil {
 				v.model.Program.Send(connectionStatusMsg{
@@ -139,13 +136,11 @@ func NewTransferView(model *ui.Model) *transferView {
 				return
 			}
 
-			// Pobierz katalog domowy i zaktualizuj ścieżkę
 			transfer := v.model.GetTransfer()
 			if homeDir, err := transfer.GetRemoteHomeDir(); err == nil {
 				v.remotePanel.path = homeDir
 			}
 
-			// Update remote panel
 			err = v.updateRemotePanel()
 			if err != nil {
 				v.model.Program.Send(connectionStatusMsg{
@@ -155,7 +150,6 @@ func NewTransferView(model *ui.Model) *transferView {
 				return
 			}
 
-			// Send success message
 			v.model.Program.Send(connectionStatusMsg{
 				connected: true,
 				err:       nil,
@@ -188,7 +182,6 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 		return nil, err
 	}
 
-	// Zawsze zaczynamy od ".." do nawigacji w górę
 	entries := []FileEntry{{
 		name:    "..",
 		isDir:   true,
@@ -196,22 +189,18 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 	}}
 
 	for _, fi := range fileInfos {
-		// Pomijamy ukryte pliki zaczynające się od "." (opcjonalnie)
 		if !strings.HasPrefix(fi.Name(), ".") || fi.Name() == ".." {
 			entries = append(entries, FileEntry{
 				name:    fi.Name(),
 				size:    fi.Size(),
 				modTime: fi.ModTime(),
 				isDir:   fi.IsDir(),
-				mode:    fi.Mode(), // Dodane
-
+				mode:    fi.Mode(),
 			})
 		}
 	}
 
-	// Sortowanie: najpierw katalogi, potem pliki, alfabetycznie
 	sort.Slice(entries[1:], func(i, j int) bool {
-		// Przesuwamy indeksy o 1, bo pomijamy ".."
 		i, j = i+1, j+1
 		if entries[i].isDir != entries[j].isDir {
 			return entries[i].isDir
@@ -225,7 +214,7 @@ func (v *transferView) readLocalDirectory(path string) ([]FileEntry, error) {
 func (v *transferView) Init() tea.Cmd {
 	if !v.connected && !v.connecting && v.model.GetSelectedHost() != nil {
 		v.connecting = true
-		return v.sendConnectionUpdate() // Usuń argument program
+		return v.sendConnectionUpdate()
 	}
 	return nil
 }
@@ -237,14 +226,13 @@ func (v *transferView) updateRemotePanel() error {
 
 	entries, err := v.readRemoteDirectory(v.remotePanel.path)
 	if err != nil {
-		v.setConnected(false) // Oznacz jako rozłączony w przypadku błędu
+		v.setConnected(false)
 		return err
 	}
 	v.remotePanel.entries = entries
 	return nil
 }
 
-// readRemoteDirectory czyta zawartość zdalnego katalogu
 func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 	if err := v.ensureConnected(); err != nil {
 		return nil, err
@@ -257,7 +245,6 @@ func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 		return nil, fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
-	// Zawsze zaczynamy od ".." do nawigacji w górę
 	entries := []FileEntry{{
 		name:    "..",
 		isDir:   true,
@@ -271,12 +258,11 @@ func (v *transferView) readRemoteDirectory(path string) ([]FileEntry, error) {
 				size:    fi.Size(),
 				modTime: fi.ModTime(),
 				isDir:   fi.IsDir(),
-				mode:    fi.Mode(), // Dodane
+				mode:    fi.Mode(),
 			})
 		}
 	}
 
-	// Sortowanie: najpierw katalogi, potem pliki, alfabetycznie
 	sort.Slice(entries[1:], func(i, j int) bool {
 		i, j = i+1, j+1
 		if entries[i].isDir != entries[j].isDir {
@@ -310,203 +296,580 @@ func (v *transferView) switchActivePanel() {
 	v.remotePanel.active = !v.remotePanel.active
 }
 
-func (v *transferView) renderPanel(p *Panel) string {
-	var content strings.Builder
+// Modern panel rendering using lipgloss
+func (v *transferView) renderPanel(p *Panel, title string, width int) string {
+	// Panel header with breadcrumb-style path
+	pathDisplay := v.formatBreadcrumb(p.path, width-4)
 
-	// Oblicz szerokość panelu
-	panelWidth := (min(v.width-40, 160) - 3) / 2
-
-	// Zastosuj styl panelu z ramką
-	var panelContent strings.Builder
-
-	// Formatowanie i skracanie ścieżki
-	pathText := formatPath(p.path, min(40, panelWidth-5))
-
-	// Użycie stylów ścieżki
-	pathStyle := inactivePathStyle
+	var headerStyle lipgloss.Style
 	if p.active {
-		pathStyle = activePathStyle
+		headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ui.GetCurrentTheme().Highlight).
+			Background(ui.GetCurrentTheme().StatusBar).
+			Width(width-2).
+			Padding(0, 1).
+			MarginBottom(0)
+	} else {
+		headerStyle = lipgloss.NewStyle().
+			Foreground(ui.GetCurrentTheme().Subtle).
+			Width(width-2).
+			Padding(0, 1).
+			MarginBottom(0)
 	}
-	panelContent.WriteString(pathStyle.Render(pathText))
-	panelContent.WriteString("\n")
 
-	// Renderowanie listy plików
-	filesList := v.renderFileList(
-		p.entries[p.scrollOffset:min(p.scrollOffset+maxVisibleItems, len(p.entries))],
-		p.selectedIndex-p.scrollOffset,
-		p.active,
-		panelWidth-2,
+	header := headerStyle.Render(fmt.Sprintf(" %s  %s", title, pathDisplay))
+
+	// File list
+	fileList := v.renderModernFileList(p, width-4)
+
+	// Panel info bar
+	var infoText string
+	if len(p.entries) > 0 {
+		selectedCount := 0
+		for _, entry := range p.entries {
+			fullPath := filepath.Join(p.path, entry.name)
+			if v.model.IsSelected(fullPath) {
+				selectedCount++
+			}
+		}
+
+		if selectedCount > 0 {
+			infoText = fmt.Sprintf(" %d/%d items (%d selected)",
+				p.selectedIndex+1, len(p.entries), selectedCount)
+		} else {
+			infoText = fmt.Sprintf(" %d/%d items", p.selectedIndex+1, len(p.entries))
+		}
+	}
+
+	infoBarStyle := lipgloss.NewStyle().
+		Foreground(ui.GetCurrentTheme().Subtle).
+		Width(width-2).
+		Padding(0, 1).
+		MarginTop(0)
+
+	infoBar := infoBarStyle.Render(infoText)
+
+	// Combine all parts
+	panelContent := lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		fileList,
+		infoBar,
 	)
-	panelContent.WriteString(filesList)
 
-	// Informacja o przewijaniu
-	if len(p.entries) > maxVisibleItems {
-		panelContent.WriteString(fmt.Sprintf("\nShowing %d-%d of %d items",
-			p.scrollOffset+1,
-			min(p.scrollOffset+maxVisibleItems, len(p.entries)),
-			len(p.entries)))
+	// Apply panel border
+	var borderStyle lipgloss.Style
+	if p.active {
+		borderStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ui.GetCurrentTheme().Highlight).
+			Width(width).
+			Height(maxVisibleItems + 4)
+	} else {
+		borderStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ui.GetCurrentTheme().Border).
+			Width(width).
+			Height(maxVisibleItems + 4)
 	}
 
-	// Zastosuj styl całego panelu
-	content.WriteString(panelStyle.
-		Width(panelWidth).
-		BorderForeground(ui.Subtle).
-		Render(panelContent.String()))
+	return borderStyle.Render(panelContent)
+}
 
-	return content.String()
+// Modern file list rendering
+func (v *transferView) renderModernFileList(p *Panel, width int) string {
+	var lines []string
+
+	// Calculate visible range
+	start := p.scrollOffset
+	end := min(start+maxVisibleItems, len(p.entries))
+
+	for i := start; i < end; i++ {
+		entry := p.entries[i]
+		fullPath := filepath.Join(p.path, entry.name)
+		isSelected := v.model.IsSelected(fullPath)
+		isActive := i == p.selectedIndex
+
+		line := v.renderFileEntry(entry, isSelected, isActive, width)
+		lines = append(lines, line)
+	}
+
+	// Fill remaining lines
+	for i := len(lines); i < maxVisibleItems; i++ {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// Render individual file entry with modern styling
+func (v *transferView) renderFileEntry(entry FileEntry, marked bool, active bool, width int) string {
+	theme := ui.GetCurrentTheme()
+
+	// Selection indicator
+	indicator := " "
+	if marked {
+		indicator = "●"
+	}
+
+	// File icon
+	icon := v.getFileIcon(entry)
+
+	// File name with proper truncation
+	maxNameWidth := width - 25 // Reserve space for size, date, and indicators
+	displayName := entry.name
+	if entry.isDir && entry.name != ".." {
+		displayName = entry.name + "/"
+	}
+	if len(displayName) > maxNameWidth {
+		displayName = displayName[:maxNameWidth-3] + "..."
+	}
+
+	// Size formatting
+	sizeStr := formatSize(entry.size)
+	if entry.isDir {
+		sizeStr = "<DIR>"
+	}
+
+	// Date formatting
+	dateStr := entry.modTime.Format("02 Jan 15:04")
+
+	// Build the line
+	var lineStyle lipgloss.Style
+	var nameColor lipgloss.Color
+
+	if active {
+		// Active selection style
+		lineStyle = lipgloss.NewStyle().
+			Background(theme.Highlight).
+			Foreground(lipgloss.Color("#000000")).
+			Bold(true).
+			Width(width)
+
+		line := fmt.Sprintf(" %s %s %-*s %8s  %s",
+			indicator, icon, maxNameWidth, displayName, sizeStr, dateStr)
+		return lineStyle.Render(line)
+	}
+
+	// Determine color based on file type
+	if entry.name == ".." {
+		nameColor = theme.DirectoryColor
+	} else if entry.isDir {
+		nameColor = theme.DirectoryColor
+	} else {
+		nameColor = v.getFileColor(entry)
+	}
+
+	// Build line parts with individual styling
+	indicatorStyle := lipgloss.NewStyle().Foreground(theme.Special)
+	iconStyle := lipgloss.NewStyle().Foreground(nameColor)
+	nameStyle := lipgloss.NewStyle().Foreground(nameColor)
+	sizeStyle := lipgloss.NewStyle().Foreground(theme.Subtle)
+	dateStyle := lipgloss.NewStyle().Foreground(theme.Subtle)
+
+	parts := []string{
+		" ",
+		indicatorStyle.Render(indicator),
+		" ",
+		iconStyle.Render(icon),
+		" ",
+		nameStyle.Render(fmt.Sprintf("%-*s", maxNameWidth, displayName)),
+		" ",
+		sizeStyle.Render(fmt.Sprintf("%8s", sizeStr)),
+		"  ",
+		dateStyle.Render(dateStr),
+	}
+
+	line := strings.Join(parts, "")
+
+	// Ensure line fits width
+	lineRunes := []rune(line)
+	if len(lineRunes) > width {
+		line = string(lineRunes[:width])
+	} else if len(lineRunes) < width {
+		line = line + strings.Repeat(" ", width-len(lineRunes))
+	}
+
+	return line
+}
+
+// Get file icon based on type
+func (v *transferView) getFileIcon(entry FileEntry) string {
+	if entry.name == ".." {
+		return "↩"
+	}
+	if entry.isDir {
+		return "📁"
+	}
+
+	ext := strings.ToLower(filepath.Ext(entry.name))
+	switch ext {
+	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
+		return "📦"
+	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp":
+		return "🖼"
+	case ".txt", ".doc", ".docx", ".pdf", ".md":
+		return "📄"
+	case ".go":
+		return "🐹"
+	case ".py":
+		return "🐍"
+	case ".js", ".ts":
+		return "📜"
+	case ".json", ".yaml", ".yml", ".toml":
+		return "⚙"
+	case ".exe", ".sh", ".bat", ".cmd":
+		return "⚡"
+	case ".c", ".h", ".cpp", ".hpp":
+		return "©"
+	default:
+		if entry.mode&0111 != 0 {
+			return "⚙"
+		}
+		return "📃"
+	}
+}
+
+// Get file color based on type
+func (v *transferView) getFileColor(entry FileEntry) lipgloss.Color {
+	theme := ui.GetCurrentTheme()
+
+	if entry.isDir {
+		return theme.DirectoryColor
+	}
+
+	ext := strings.ToLower(filepath.Ext(entry.name))
+	switch ext {
+	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
+		return theme.ArchiveColor
+	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp":
+		return theme.ImageColor
+	case ".txt", ".doc", ".docx", ".pdf", ".md", ".csv", ".xlsx", ".odt":
+		return theme.DocumentColor
+	case ".c":
+		return theme.CodeCColor
+	case ".h":
+		return theme.CodeHColor
+	case ".go":
+		return theme.CodeGoColor
+	case ".py":
+		return theme.CodePyColor
+	case ".js", ".ts":
+		return theme.CodeJsColor
+	case ".json", ".yaml", ".yml":
+		return theme.CodeJsonColor
+	case ".exe", ".sh", ".bat", ".cmd", ".com", ".app":
+		return theme.ExecutableColor
+	default:
+		if entry.mode&0111 != 0 {
+			return theme.ExecutableColor
+		}
+		return theme.DefaultFileColor
+	}
+}
+
+// Format breadcrumb-style path
+func (v *transferView) formatBreadcrumb(path string, maxWidth int) string {
+	if len(path) <= maxWidth {
+		return path
+	}
+
+	// Split path and show last few segments
+	parts := strings.Split(path, string(filepath.Separator))
+	result := ""
+
+	for i := len(parts) - 1; i >= 0; i-- {
+		segment := parts[i]
+		if len(result)+len(segment)+3 > maxWidth {
+			result = "…/" + result
+			break
+		}
+		if result == "" {
+			result = segment
+		} else {
+			result = segment + "/" + result
+		}
+	}
+
+	return result
 }
 
 func (v *transferView) View() string {
 	var content strings.Builder
-	// Tytuł i status połączenia
-	titleContent := ui.TitleStyle.Render("File Transfer")
-	if v.connected {
-		if host := v.model.GetSelectedHost(); host != nil {
-			titleContent += ui.SuccessStyle.Render(
-				fmt.Sprintf(" - Connected to %s (%s)", host.Name, host.IP),
-			)
-		}
-	} else if host := v.model.GetSelectedHost(); host != nil {
-		if v.connecting {
-			titleContent += ui.DescriptionStyle.Render(" - Establishing connection...")
-		} else {
-			titleContent += ui.ErrorStyle.Render(
-				fmt.Sprintf(" - Not connected to %s (%s)", host.Name, host.IP),
-			)
-		}
-	}
-	content.WriteString(titleContent + "\n\n")
 
-	// Obsługa stanu łączenia
+	// Modern title bar
+	titleContent := v.renderTitleBar()
+	content.WriteString(titleContent + "\n")
+
+	// Handle connecting state
 	if v.connecting {
-		connectingContent := ui.DescriptionStyle.Render("Establishing SFTP connection...")
-		return lipgloss.Place(
-			v.width,
-			v.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			ui.WindowStyle.Render(connectingContent),
-		)
+		connectingView := v.renderConnectingScreen()
+		return lipgloss.Place(v.width, v.height, lipgloss.Center, lipgloss.Center, connectingView)
 	}
 
-	// Obsługa widoku pomocy
+	// Handle help view
 	if v.showHelp {
-		helpContent := ui.DescriptionStyle.Render(helpText)
-		return lipgloss.Place(
-			v.width,
-			v.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			ui.WindowStyle.Render(helpContent),
-		)
+		helpView := v.renderHelpScreen()
+		return lipgloss.Place(v.width, v.height, lipgloss.Center, lipgloss.Center, helpView)
 	}
 
-	// Oblicz szerokość paneli na podstawie szerokości ekranu
-	totalWidth := min(v.width-40, 160) // Zmniejszamy szerokość o marginesy (20 z każdej strony)
-	panelWidth := (totalWidth - 3) / 2 // 3 to szerokość separatora
+	// Calculate panel width
+	availableWidth := min(v.width-10, 160)
+	panelWidth := (availableWidth - 6) / 2
 
-	// Renderuj panele
-	leftPanel := v.renderPanel(&v.localPanel)
-	rightPanel := ""
+	// Render panels side by side
+	leftPanel := v.renderPanel(&v.localPanel, "📁 Local", panelWidth)
+
+	var rightPanel string
 	if !v.connected {
-		rightPanel = ui.ErrorStyle.Render("\n  No SFTP Connection\n  Press 'q' to return and connect to a host first.")
+		rightPanel = v.renderDisconnectedPanel(panelWidth)
 	} else {
-		rightPanel = v.renderPanel(&v.remotePanel)
+		rightPanel = v.renderPanel(&v.remotePanel, "🌐 Remote", panelWidth)
 	}
 
-	// Wyrównaj panele
-	leftLines := strings.Split(leftPanel, "\n")
-	rightLines := strings.Split(rightPanel, "\n")
-	maxLines := max(len(leftLines), len(rightLines))
+	panelsView := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, "  ", rightPanel)
+	content.WriteString(panelsView + "\n")
 
-	// Wyrównaj liczbę linii w panelach
-	for i := len(leftLines); i < maxLines; i++ {
-		leftLines = append(leftLines, strings.Repeat(" ", panelWidth))
-	}
-	for i := len(rightLines); i < maxLines; i++ {
-		rightLines = append(rightLines, strings.Repeat(" ", panelWidth))
-	}
-
-	// Połącz panele
-	for i := 0; i < maxLines; i++ {
-		content.WriteString(leftLines[i])
-		content.WriteString(" │ ")
-		content.WriteString(rightLines[i])
-		content.WriteString("\n")
-	}
-
-	// Pasek postępu
+	// Progress bar
 	if v.transferring {
-		content.WriteString("\n")
-		progressBar := v.formatProgressBar(totalWidth)
-		content.WriteString(ui.DescriptionStyle.Render(progressBar))
+		progressBar := v.renderModernProgressBar(availableWidth)
+		content.WriteString("\n" + progressBar + "\n")
 	}
 
+	// Command input (if active)
 	if v.isWaitingForInput() {
 		content.WriteString("\n" + v.input.View())
 	}
 
-	footer := v.renderFooter()
-	content.WriteString("\n")
-	content.WriteString(footer)
+	// Modern footer with shortcuts
+	footer := v.renderModernFooter()
+	content.WriteString("\n" + footer)
 
-	// Renderuj całość w oknie
+	// Wrap in window style
 	finalContent := ui.WindowStyle.Render(content.String())
 
-	// Jeśli jest aktywny popup, renderuj go na wierzchu (wycentrowany)
+	// Handle popup overlay
 	if v.popup != nil {
-		return lipgloss.Place(
-			v.width,
-			v.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			finalContent+"\n"+v.popup.Render(),
-			lipgloss.WithWhitespaceChars(""),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-		)
+		overlay := lipgloss.Place(v.width, v.height, lipgloss.Center, lipgloss.Center,
+			finalContent+"\n"+v.popup.Render())
+		return overlay
 	}
 
-	// Główny widok wyrównany do lewego górnego rogu
-	return lipgloss.Place(
-		v.width,
-		v.height,
-		lipgloss.Left, // Zmiana z Center na Left
-		lipgloss.Top,  // Zmiana z Center na Top
-		finalContent,
-		lipgloss.WithWhitespaceChars(""),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-	)
+	return lipgloss.Place(v.width, v.height, lipgloss.Left, lipgloss.Top, finalContent)
 }
 
-// Pomocnicza funkcja do określania maksimum
-func max(a, b int) int {
-	if a > b {
-		return a
+// Modern title bar
+func (v *transferView) renderTitleBar() string {
+	theme := ui.GetCurrentTheme()
+
+	title := "📁 File Transfer Manager"
+
+	var status string
+	var statusStyle lipgloss.Style
+
+	if v.connected {
+		if host := v.model.GetSelectedHost(); host != nil {
+			status = fmt.Sprintf("✓ Connected to %s (%s)", host.Name, host.IP)
+			statusStyle = lipgloss.NewStyle().
+				Foreground(theme.Special).
+				Bold(true)
+		}
+	} else if host := v.model.GetSelectedHost(); host != nil {
+		if v.connecting {
+			status = "⟳ Establishing connection..."
+			statusStyle = lipgloss.NewStyle().
+				Foreground(theme.Highlight)
+		} else {
+			status = fmt.Sprintf("✗ Not connected to %s", host.Name)
+			statusStyle = lipgloss.NewStyle().
+				Foreground(theme.Error)
+		}
 	}
-	return b
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(theme.Highlight).
+		Bold(true)
+
+	return titleStyle.Render(title) + "  " + statusStyle.Render(status)
 }
 
-// Pomocnicza funkcja min
-func min(a, b int) int {
-	if a < b {
-		return a
+// Modern progress bar
+func (v *transferView) renderModernProgressBar(width int) string {
+	if !v.transferring || v.progress.TotalBytes == 0 {
+		return ""
 	}
-	return b
+
+	theme := ui.GetCurrentTheme()
+	percentage := float64(v.progress.TransferredBytes) / float64(v.progress.TotalBytes)
+
+	// Progress bar
+	barWidth := width - 40
+	completedWidth := int(float64(barWidth) * percentage)
+
+	barStyle := lipgloss.NewStyle().
+		Foreground(theme.Special).
+		Background(theme.Subtle)
+
+	bar := barStyle.Render(strings.Repeat("█", completedWidth)) +
+		lipgloss.NewStyle().Foreground(theme.Subtle).Render(strings.Repeat("░", barWidth-completedWidth))
+
+	// Calculate speed
+	elapsed := time.Since(v.progress.StartTime).Seconds()
+	if elapsed == 0 {
+		elapsed = 1
+	}
+	speed := float64(v.progress.TransferredBytes) / elapsed
+
+	progressText := fmt.Sprintf("📤 %s  %s %3.0f%%  %s/s",
+		v.progress.FileName,
+		bar,
+		percentage*100,
+		formatSize(int64(speed)))
+
+	return lipgloss.NewStyle().
+		Foreground(theme.Highlight).
+		Render(progressText)
 }
 
-// formatSize formatuje rozmiar pliku
-func formatSize(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%d B", size)
+// Modern footer with shortcuts
+func (v *transferView) renderModernFooter() string {
+	theme := ui.GetCurrentTheme()
+
+	// Error message
+	if v.errorMessage != "" {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(theme.Error).
+			Bold(true)
+		return errorStyle.Render("✗ " + v.errorMessage)
 	}
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
+
+	// Status message
+	if v.statusMessage != "" {
+		statusStyle := lipgloss.NewStyle().
+			Foreground(theme.Highlight)
+		return statusStyle.Render("ℹ " + v.statusMessage)
 	}
-	return fmt.Sprintf("%.1f %cB",
-		float64(size)/float64(div), "KMGTPE"[exp])
+
+	if !v.connected {
+		disconnectedStyle := lipgloss.NewStyle().
+			Foreground(theme.Error)
+		return disconnectedStyle.Render("⚠ Not connected. Press 'q' to return to main menu.")
+	}
+
+	// Shortcuts bar
+	shortcuts := []string{
+		"Tab·Switch",
+		"x·Select",
+		"F5·Copy",
+		"F6·Rename",
+		"F7·MkDir",
+		"F8·Del",
+		"F1·Help",
+		"Space·Theme",
+		"q·Exit",
+	}
+
+	shortcutStyle := lipgloss.NewStyle().
+		Foreground(theme.Special).
+		Bold(false)
+
+	separatorStyle := lipgloss.NewStyle().
+		Foreground(theme.Subtle)
+
+	var parts []string
+	for i, shortcut := range shortcuts {
+		parts = append(parts, shortcutStyle.Render(shortcut))
+		if i < len(shortcuts)-1 {
+			parts = append(parts, separatorStyle.Render(" │ "))
+		}
+	}
+
+	return strings.Join(parts, "")
+}
+
+// Render disconnected panel
+func (v *transferView) renderDisconnectedPanel(width int) string {
+	theme := ui.GetCurrentTheme()
+
+	message := lipgloss.NewStyle().
+		Foreground(theme.Error).
+		Bold(true).
+		Align(lipgloss.Center).
+		Width(width - 4).
+		Render("\n\n⚠ No SFTP Connection\n\nPress 'q' to return to main menu\nand connect to a host first")
+
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(theme.Subtle).
+		Width(width).
+		Height(maxVisibleItems + 4)
+
+	return borderStyle.Render(message)
+}
+
+// Render connecting screen
+func (v *transferView) renderConnectingScreen() string {
+	theme := ui.GetCurrentTheme()
+
+	spinner := "⟳"
+	message := lipgloss.NewStyle().
+		Foreground(theme.Highlight).
+		Bold(true).
+		Render(fmt.Sprintf("%s Establishing SFTP connection...", spinner))
+
+	return ui.WindowStyle.Render(message)
+}
+
+// Render help screen
+func (v *transferView) renderHelpScreen() string {
+	theme := ui.GetCurrentTheme()
+
+	helpText := `
+╔═══════════════════════════════════════════════╗
+║        FILE TRANSFER HELP                     ║
+╚═══════════════════════════════════════════════╝
+
+Navigation:
+  ↑/↓, w/s     Move cursor up/down
+  Enter        Enter directory / Open file
+  Backspace    Go to parent directory
+  Tab          Switch between panels
+
+File Operations:
+  x            Select/unselect current file
+  F5 / c       Copy file(s) to other panel
+  F6 / r       Rename file/directory
+  F7 / m       Create new directory
+  F8 / d       Delete file/directory
+  
+View & Settings:
+  F1           Toggle this help
+  Space        Change theme
+  Ctrl+R       Refresh current panel
+
+Transfer:
+  ESC+5        Alternative copy
+  ESC+0        Exit transfer mode
+
+General:
+  q            Exit to main menu
+  ESC          Cancel current operation
+
+Tips:
+  • Use 'x' to select multiple files before copying
+  • Double-click on items to enter directories
+  • Selected items are marked with ●
+  • Active panel has highlighted border
+`
+
+	helpStyle := lipgloss.NewStyle().
+		Foreground(theme.LabelColor).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(theme.Highlight).
+		Padding(1, 2).
+		Width(60)
+
+	return helpStyle.Render(helpText)
 }
 
 // navigatePanel obsługuje nawigację w panelu
@@ -527,14 +890,13 @@ func (v *transferView) navigatePanel(p *Panel, direction int) {
 
 	p.selectedIndex = newIndex
 
-	// Dostosuj przewijanie
+	// Adjust scrolling
 	if p.selectedIndex < p.scrollOffset {
 		p.scrollOffset = p.selectedIndex
 	} else if p.selectedIndex >= p.scrollOffset+maxVisibleItems {
 		p.scrollOffset = p.selectedIndex - maxVisibleItems + 1
 	}
 
-	// Upewnij się, że scrollOffset nie jest ujemny
 	if p.scrollOffset < 0 {
 		p.scrollOffset = 0
 	}
@@ -553,9 +915,7 @@ func (v *transferView) enterDirectory(p *Panel) error {
 
 	var newPath string
 	if entry.name == ".." {
-		// Nawigacja do góry
 		newPath = filepath.Dir(p.path)
-		// Dla Windows możemy potrzebować dodatkowej obsługi ścieżki głównej
 		if runtime.GOOS == "windows" && filepath.Dir(newPath) == newPath {
 			newPath = filepath.VolumeName(newPath) + "\\"
 		}
@@ -563,11 +923,9 @@ func (v *transferView) enterDirectory(p *Panel) error {
 		newPath = filepath.Join(p.path, entry.name)
 	}
 
-	// Zapisz poprzednią ścieżkę
 	oldPath := p.path
 	p.path = newPath
 
-	// Spróbuj odświeżyć zawartość
 	var err error
 	if p == &v.localPanel {
 		err = v.updateLocalPanel()
@@ -575,13 +933,11 @@ func (v *transferView) enterDirectory(p *Panel) error {
 		err = v.updateRemotePanel()
 	}
 
-	// W przypadku błędu, przywróć poprzednią ścieżkę
 	if err != nil {
 		p.path = oldPath
 		return err
 	}
 
-	// Resetuj wybór i przewijanie
 	p.selectedIndex = 0
 	p.scrollOffset = 0
 	return nil
@@ -612,7 +968,7 @@ func (v *transferView) hasSelectedItems() bool {
 
 func (v *transferView) getSelectedItems() map[string]bool {
 	selected := make(map[string]bool)
-	paths := v.model.GetSelectedPaths() // zakładając, że taka metoda istnieje w Model
+	paths := v.model.GetSelectedPaths()
 	for _, path := range paths {
 		selected[path] = true
 	}
@@ -642,11 +998,9 @@ func (v *transferView) copyFile() tea.Cmd {
 
 		var srcPath, dstPath string
 		if isLocal {
-			// Local to Remote
 			srcPath = filepath.Join(srcPanel.path, srcName)
 			dstPath = utils.ToSFTPPath(filepath.Join(dstPanel.path, dstName))
 		} else {
-			// Remote to Local
 			srcPath = utils.ToSFTPPath(filepath.Join(srcPanel.path, srcName))
 			dstPath = utils.ToLocalPath(filepath.Join(dstPanel.path, dstName))
 		}
@@ -657,7 +1011,6 @@ func (v *transferView) copyFile() tea.Cmd {
 			isDir   bool
 		}{srcPath, dstPath, entry.isDir})
 	} else {
-		// Handle selected files
 		for path, isSelected := range v.getSelectedItems() {
 			if !isSelected {
 				continue
@@ -669,11 +1022,9 @@ func (v *transferView) copyFile() tea.Cmd {
 
 			var srcPath, dstPath string
 			if isLocal {
-				// Local to Remote
 				srcPath = filepath.Join(srcPanel.path, srcName)
 				dstPath = utils.ToSFTPPath(filepath.Join(dstPanel.path, dstName))
 			} else {
-				// Remote to Local
 				srcPath = utils.ToSFTPPath(filepath.Join(srcPanel.path, srcName))
 				dstPath = utils.ToLocalPath(filepath.Join(dstPanel.path, dstName))
 			}
@@ -763,7 +1114,6 @@ func (v *transferView) copyDirectoryToRemote(localPath, remotePath string, trans
 			return fmt.Errorf("failed to get relative path: %v", err)
 		}
 
-		// Konwersja ścieżki na format SFTP
 		remotePathFull := utils.ToSFTPPath(filepath.Join(remotePath, relPath))
 
 		if info.IsDir() {
@@ -786,7 +1136,6 @@ func (v *transferView) copyDirectoryFromRemote(remotePath, localPath string, tra
 	}
 
 	for _, entry := range entries {
-		// Pomijamy "." i ".."
 		if entry.Name() == "." || entry.Name() == ".." {
 			continue
 		}
@@ -829,7 +1178,6 @@ func (v *transferView) executeDelete() error {
 	} else {
 		transfer := v.model.GetTransfer()
 		if entry.isDir {
-			// Rekursywne usuwanie katalogu na zdalnym serwerze
 			err = v.removeRemoteDirectory(path, transfer)
 		} else {
 			err = transfer.RemoveRemoteFile(path)
@@ -840,7 +1188,6 @@ func (v *transferView) executeDelete() error {
 		return fmt.Errorf("failed to delete %s '%s': %v", itemType, entry.name, err)
 	}
 
-	// Odśwież panel po usunięciu
 	if panel == &v.localPanel {
 		err = v.updateLocalPanel()
 	} else {
@@ -856,13 +1203,11 @@ func (v *transferView) executeDelete() error {
 }
 
 func (v *transferView) removeRemoteDirectory(path string, transfer *ssh.FileTransfer) error {
-	// Pobierz listę plików w katalogu
 	entries, err := transfer.ListRemoteFiles(path)
 	if err != nil {
 		return fmt.Errorf("failed to list remote directory: %v", err)
 	}
 
-	// Rekurencyjnie usuń zawartość katalogu
 	for _, entry := range entries {
 		if entry.Name() == "." || entry.Name() == ".." {
 			continue
@@ -870,19 +1215,16 @@ func (v *transferView) removeRemoteDirectory(path string, transfer *ssh.FileTran
 
 		fullPath := filepath.Join(path, entry.Name())
 		if entry.IsDir() {
-			// Rekurencyjnie usuń podkatalog
 			if err := v.removeRemoteDirectory(fullPath, transfer); err != nil {
 				return err
 			}
 		} else {
-			// Usuń plik
 			if err := transfer.RemoveRemoteFile(fullPath); err != nil {
 				return err
 			}
 		}
 	}
 
-	// Na końcu usuń sam katalog
 	return transfer.RemoveRemoteFile(path)
 }
 
@@ -892,58 +1234,49 @@ func (v *transferView) createDirectory(name string) error {
 		return fmt.Errorf("directory name cannot be empty")
 	}
 
-	// Sprawdź czy nazwa nie zawiera niedozwolonych znaków
 	if strings.ContainsAny(name, "/\\") {
 		return fmt.Errorf("directory name cannot contain path separators")
 	}
 
 	panel := v.getActivePanel()
-	path := filepath.Join(panel.path, name)
+	newPath := filepath.Join(panel.path, name)
 
 	var err error
 	if panel == &v.localPanel {
-		err = os.MkdirAll(path, 0755)
+		err = os.Mkdir(newPath, 0755)
 	} else {
-		if !v.connected {
-			return fmt.Errorf("not connected to remote host")
-		}
 		transfer := v.model.GetTransfer()
-		err = transfer.CreateRemoteDirectory(path)
+		err = transfer.CreateRemoteDirectory(newPath)
 	}
 
 	if err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
-	// Odśwież panel
 	if panel == &v.localPanel {
-		err = v.updateLocalPanel()
+		v.updateLocalPanel()
 	} else {
-		err = v.updateRemotePanel()
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to refresh panel: %v", err)
+		v.updateRemotePanel()
 	}
 
 	v.statusMessage = fmt.Sprintf("Created directory '%s'", name)
 	return nil
 }
 
-// renameFile changes the name of a file in the active panel
+// renameFile zmienia nazwę pliku
 func (v *transferView) renameFile(newName string) error {
 	if newName == "" {
 		return fmt.Errorf("new name cannot be empty")
 	}
 
 	panel := v.getActivePanel()
-	if len(panel.entries) == 0 || panel.selectedIndex >= len(panel.entries) {
+	if panel.selectedIndex >= len(panel.entries) {
 		return fmt.Errorf("no file selected")
 	}
 
 	entry := panel.entries[panel.selectedIndex]
 	if entry.name == ".." {
-		return fmt.Errorf("cannot rename parent directory reference")
+		return fmt.Errorf("cannot rename parent directory")
 	}
 
 	oldPath := filepath.Join(panel.path, entry.name)
@@ -951,52 +1284,31 @@ func (v *transferView) renameFile(newName string) error {
 
 	var err error
 	if panel == &v.localPanel {
-		// For local files, use standard os.Rename
 		err = os.Rename(oldPath, newPath)
 	} else {
-		// For remote files, convert paths to SFTP format
 		transfer := v.model.GetTransfer()
-		oldPathSFTP := utils.ToSFTPPath(oldPath)
-		newPathSFTP := utils.ToSFTPPath(newPath)
-		err = transfer.RenameRemoteFile(oldPathSFTP, newPathSFTP)
+		err = transfer.RenameRemoteFile(oldPath, newPath)
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to rename file: %v", err)
+		return fmt.Errorf("failed to rename: %v", err)
 	}
 
-	// Refresh the panel after renaming
 	if panel == &v.localPanel {
-		err = v.updateLocalPanel()
+		v.updateLocalPanel()
 	} else {
-		err = v.updateRemotePanel()
+		v.updateRemotePanel()
 	}
 
-	if err != nil {
-		return fmt.Errorf("failed to refresh panel: %v", err)
-	}
-
-	v.statusMessage = fmt.Sprintf("Renamed %s to %s", entry.name, newName)
+	v.statusMessage = fmt.Sprintf("Renamed '%s' to '%s'", entry.name, newName)
 	return nil
 }
-
-// handleError obsługuje błędy i wyświetla komunikat
-func (v *transferView) handleError(err error) {
-	if err != nil {
-		v.errorMessage = err.Error()
-	}
-}
-
-// update
 
 func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		v.mutex.Lock()
 		v.width = msg.Width
 		v.height = msg.Height
-		v.model.UpdateWindowSize(msg.Width, msg.Height)
-		v.mutex.Unlock()
 		return v, nil
 
 	case transferProgressMsg:
@@ -1059,54 +1371,42 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, nil
 
 	case tea.MouseMsg:
-		// Handle mouse events for transfer view
 		switch msg.Type {
 		case tea.MouseLeft:
-			// Handle popup clicks
 			if v.popup != nil {
-				// Check if click is within popup bounds
 				if msg.X >= v.popup.X && msg.X <= v.popup.X+v.popup.Width &&
 					msg.Y >= v.popup.Y && msg.Y <= v.popup.Y+v.popup.Height {
-					// Handle different popup types
 					if v.popup.Type == components.PopupDelete {
-						// Y/N buttons - Y on left, N on right
 						if msg.Y >= v.popup.Y+v.popup.Height-3 {
 							if msg.X < v.popup.X+v.popup.Width/2 {
-								// Y clicked
 								if err := v.executeDelete(); err != nil {
 									v.handleError(err)
 								}
 								v.popup = nil
 								return v, nil
 							} else {
-								// N clicked
 								v.popup = nil
 								return v, nil
 							}
 						}
 					} else if v.popup.Type == components.PopupRename || v.popup.Type == components.PopupMkdir {
-						// OK/Cancel buttons
 						if msg.Y >= v.popup.Y+v.popup.Height-3 {
 							if msg.X < v.popup.X+v.popup.Width/2 {
-								// OK clicked
 								if err := v.handleCommand(v.popup.Input.Value()); err != nil {
 									v.handleError(err)
 								}
 								v.popup = nil
 								return v, nil
 							} else {
-								// Cancel clicked
 								v.popup = nil
 								return v, nil
 							}
 						}
-						// Focus input field if clicked on it
 						if msg.Y == v.popup.Y+2 && msg.X >= v.popup.X+1 && msg.X <= v.popup.X+v.popup.Width-2 {
 							v.popup.Input.Focus()
 							return v, nil
 						}
 					} else {
-						// Message popup - click anywhere to dismiss
 						v.popup = nil
 						return v, nil
 					}
@@ -1114,19 +1414,14 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 
-			// Handle panel clicks with accurate positioning
-			panelWidth := (min(v.width-40, 160) - 3) / 2
-			// Layout breakdown (0-indexed Y): window border (0), padding (1),
-			// title (2), blank line (3), panel border (4), path line (5), header (6).
-			// The first file entry therefore starts at line 7.
+			panelWidth := (min(v.width-10, 160) - 6) / 2
 			panelStartY := 7
-			panelHeight := v.height - 10 // Approximate height of panels
+			panelHeight := v.height - 10
 
-			// Check if click is in left panel (local)
+			// Left panel click
 			if msg.Y >= panelStartY && msg.Y < panelStartY+panelHeight && msg.X >= 1 && msg.X < panelWidth {
 				v.localPanel.active = true
 				v.remotePanel.active = false
-				// Calculate clicked index accounting for scroll offset
 				clickedIndex := msg.Y - panelStartY + v.localPanel.scrollOffset
 				if clickedIndex >= 0 && clickedIndex < len(v.localPanel.entries) {
 					now := time.Now()
@@ -1151,13 +1446,12 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			}
 
-			// Check if click is in right panel (remote)
-			separatorPos := panelWidth + 4 // Account for separator
+			// Right panel click
+			separatorPos := panelWidth + 4
 			if msg.Y >= panelStartY && msg.Y < panelStartY+panelHeight &&
 				msg.X >= separatorPos && msg.X < separatorPos+panelWidth {
 				v.localPanel.active = false
 				v.remotePanel.active = true
-				// Calculate clicked index accounting for scroll offset
 				clickedIndex := msg.Y - panelStartY + v.remotePanel.scrollOffset
 				if clickedIndex >= 0 && clickedIndex < len(v.remotePanel.entries) {
 					now := time.Now()
@@ -1183,7 +1477,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.MouseWheelUp:
-			// Scroll up in active panel
 			panel := v.getActivePanel()
 			if panel.selectedIndex > 0 {
 				panel.selectedIndex--
@@ -1193,7 +1486,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.MouseWheelDown:
-			// Scroll down in active panel
 			panel := v.getActivePanel()
 			if panel.selectedIndex < len(panel.entries)-1 {
 				panel.selectedIndex++
@@ -1204,7 +1496,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		// Obsługa popupu
+		// Handle popup
 		if v.popup != nil {
 			switch msg.String() {
 			case "esc":
@@ -1212,7 +1504,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v, nil
 			case "enter":
 				if v.popup.Type != components.PopupDelete {
-					// Użyj v.popup.Input zamiast v.input
 					if err := v.handleCommand(v.popup.Input.Value()); err != nil {
 						v.handleError(err)
 					}
@@ -1235,25 +1526,25 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				if v.popup.Type != components.PopupDelete {
 					var cmd tea.Cmd
-					// Aktualizuj v.popup.Input zamiast v.input
 					v.popup.Input, cmd = v.popup.Input.Update(msg)
 					return v, cmd
 				}
 			}
 			return v, nil
 		}
-		// Obsługa trybu pomocy
+
+		// Handle help
 		if v.showHelp {
 			switch msg.String() {
 			case "esc", "q", "f1":
 				v.showHelp = false
 				return v, nil
 			default:
-				return v, nil // Ignoruj inne klawisze w trybie pomocy
+				return v, nil
 			}
 		}
 
-		// Obsługa sekwencji ESC
+		// Handle ESC sequences
 		if v.escPressed {
 			switch msg.String() {
 			case "0", "q":
@@ -1335,7 +1626,7 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return v, nil
 			}
-			// Reset stan}u ESC
+
 			v.escPressed = false
 			if v.escTimeout != nil {
 				v.escTimeout.Stop()
@@ -1343,39 +1634,38 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return v, nil
 		}
 
-		// Pojedyncze naciśnięcie ESC
-		if msg.String() == "esc" {
-			if v.popup != nil {
-				v.popup = nil
-				return v, nil
-			}
-			v.escPressed = true
-			if v.escTimeout != nil {
-				v.escTimeout.Stop()
-			}
-			v.escTimeout = time.NewTimer(500 * time.Millisecond)
-			go func() {
-				<-v.escTimeout.C
-				v.escPressed = false
-			}()
-			return v, nil
-		}
-
-		// Standardowe klawisze funkcyjne
+		// Normal key handling
 		switch msg.String() {
-		case " ": // dodajemy jako pierwszy case
-			if !v.transferring {
-				ui.SwitchTheme()
-				return v, nil
+		case "esc":
+			if !v.escPressed {
+				v.escPressed = true
+				v.escTimeout = time.AfterFunc(1*time.Second, func() {
+					v.escPressed = false
+				})
 			}
+			return v, nil
+
 		case "f1":
 			v.showHelp = !v.showHelp
 			return v, nil
 
+		case " ":
+			ui.NextTheme()
+			return v, nil
+
+		case "ctrl+r":
+			panel := v.getActivePanel()
+			if panel == &v.localPanel {
+				v.updateLocalPanel()
+			} else {
+				v.updateRemotePanel()
+			}
+			v.statusMessage = "Panel refreshed"
+			return v, nil
+
 		case "f5", "c":
-			if !v.transferring {
-				cmd := v.copyFile()
-				return v, cmd
+			if !v.transferring && v.connected {
+				return v, v.copyFile()
 			}
 			return v, nil
 
@@ -1435,7 +1725,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return v, nil
 
-		// Standardowe klawisze nawigacji i kontroli
 		case "q":
 			if v.transferring {
 				return v, nil
@@ -1485,7 +1774,6 @@ func (v *transferView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return v, nil
-
 		}
 
 	case ssh.TransferProgress:
@@ -1502,12 +1790,12 @@ func (v *transferView) handleCommand(cmd string) error {
 		return fmt.Errorf("no active popup")
 	}
 
-	switch v.popup.Type { // użycie Type zamiast promptType
-	case components.PopupRename: // użycie components.PopupRename zamiast promptRename
+	switch v.popup.Type {
+	case components.PopupRename:
 		err := v.renameFile(cmd)
 		v.popup = nil
 		return err
-	case components.PopupMkdir: // użycie components.PopupMkdir zamiast promptMkdir
+	case components.PopupMkdir:
 		err := v.createDirectory(cmd)
 		v.popup = nil
 		return err
@@ -1515,34 +1803,6 @@ func (v *transferView) handleCommand(cmd string) error {
 		v.popup = nil
 		return fmt.Errorf("unknown command")
 	}
-}
-
-// internal/ui/views/transfer.go
-
-func (v *transferView) formatProgressBar(width int) string {
-	if !v.transferring || v.progress.TotalBytes == 0 {
-		return ""
-	}
-
-	percentage := float64(v.progress.TransferredBytes) / float64(v.progress.TotalBytes)
-	barWidth := width - 30 // Zostaw miejsce na procenty i prędkość
-	completedWidth := int(float64(barWidth) * percentage)
-
-	bar := fmt.Sprintf("[%s%s] %3.0f%%",
-		strings.Repeat("=", completedWidth),
-		strings.Repeat(" ", barWidth-completedWidth),
-		percentage*100)
-
-	elapsed := time.Since(v.progress.StartTime).Seconds()
-	if elapsed == 0 {
-		elapsed = 1 // Zapobieganie dzieleniu przez zero
-	}
-	speed := float64(v.progress.TransferredBytes) / elapsed
-
-	return fmt.Sprintf("%s %s %s/s",
-		v.progress.FileName,
-		bar,
-		formatSize(int64(speed)))
 }
 
 // shouldShowDeleteConfirm sprawdza czy wyświetlić potwierdzenie usunięcia
@@ -1553,275 +1813,6 @@ func (v *transferView) shouldShowDeleteConfirm() bool {
 // isWaitingForInput sprawdza czy oczekuje na wprowadzenie tekstu
 func (v *transferView) isWaitingForInput() bool {
 	return strings.HasPrefix(v.statusMessage, "Enter ")
-}
-
-var helpText = `
- File Transfer Help
- -----------------
- Tab          - Switch panel
- Enter        - Enter directory
- F5/ESC+5/c   - Copy file
- F6/ESC+6/r   - Rename
- F7/ESC+7/m   - Create directory
- F8/ESC+8/d   - Delete
- F1           - Toggle help
- Ctrl+r       - Refresh
- q/ESC+0      - Exit
- x            - Select/Unselect file
-
- Navigation
- ----------
- Up/w         - Move up
- Down/s       - Move down
-`
-
-func (v *transferView) renderShortcuts() string {
-	// Nagłówki tabeli i skróty
-	headers := []string{"Switch Panel", "Select", "Copy", "Rename", "MkDir", "Delete", "Help", "Theme", "Exit"}
-	shortcuts := []string{"[Tab]", "[x]", "[F5|ESC+5|c]", "[F6|ESC+6|r]", "[F7|ESC+7|m]", "[F8|ESC+8|d]", "[F1]", "[space]", "[q|ESC+0]"}
-
-	// Funkcja stylizująca kolumny
-	var TableStyle = func(row, col int) lipgloss.Style {
-		switch {
-		case row == 0: // Nagłówki
-			return lipgloss.NewStyle().
-				Padding(0, 1).
-				Foreground(ui.Subtle).
-				Align(lipgloss.Center)
-		default: // Skróty
-			return lipgloss.NewStyle().
-				Padding(0, 1).
-				Foreground(ui.Special).
-				Align(lipgloss.Center)
-		}
-	}
-
-	// Tworzenie tabeli
-	cmdTable := ltable.New().
-		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(ui.StatusBar)).
-		StyleFunc(TableStyle).
-		Headers(headers...).
-		Row(shortcuts...)
-
-	// Renderowanie tabeli
-	return cmdTable.Render()
-}
-
-// Funkcja pomocnicza do budowania wierszy
-
-// Pomocnicze stałe dla kolorów i stylów
-var (
-	panelBorder = lipgloss.Border{
-		Top:         "─",
-		Bottom:      "─",
-		Left:        "│",
-		Right:       "│",
-		TopLeft:     "┌",
-		TopRight:    "┐",
-		BottomLeft:  "└",
-		BottomRight: "┘",
-	}
-
-	panelStyle = lipgloss.NewStyle().
-			Border(panelBorder).
-			BorderForeground(ui.Subtle).
-			Padding(0, 1).
-			Height(20) // Dodaj stałą wysokość
-
-	activePathStyle = lipgloss.NewStyle().
-			Bold(true).
-			Background(ui.Highlight).
-			Foreground(lipgloss.Color("0"))
-
-	inactivePathStyle = lipgloss.NewStyle().
-				Foreground(ui.Subtle)
-)
-
-// formatPath formatuje ścieżkę do wyświetlenia
-func formatPath(path string, maxWidth int) string {
-	if len(path) <= maxWidth {
-		return path
-	}
-
-	// Dodaj "..." na początku jeśli ścieżka jest za długa
-	return "..." + path[len(path)-(maxWidth-3):]
-}
-
-func getFileType(entry FileEntry) string {
-	if entry.isDir {
-		return "directory"
-	}
-
-	// Określenie typu na podstawie rozszerzenia
-	ext := strings.ToLower(filepath.Ext(entry.name))
-
-	// Archiwa
-	switch ext {
-	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
-		return "archive"
-	}
-
-	// Obrazy
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp":
-		return "image"
-	}
-
-	// Dokumenty
-	switch ext {
-	case ".txt", ".doc", ".docx", ".pdf", ".md", ".csv", ".xlsx", ".odt":
-		return "document"
-	}
-
-	// Pliki wykonywalne
-	switch ext {
-	case ".exe", ".sh", ".bat", ".cmd", ".com", ".app":
-		return "executable"
-	}
-
-	// Pliki kodu
-	switch ext {
-	case ".c":
-		return "code_c"
-	case ".h":
-		return "code_h"
-	case ".go":
-		return "code_go"
-	case ".py":
-		return "code_py"
-	case ".js":
-		return "code_js"
-	case ".json":
-		return "code_json"
-		// Możesz dodać więcej rozszerzeń dla innych języków programowania tutaj
-	}
-
-	// Jeśli plik ma ustawione prawa wykonywania
-	if entry.mode&0111 != 0 {
-		return "executable"
-	}
-
-	return "default"
-}
-
-// internal/ui/views/transfer.go
-// internal/ui/views/transfer.go
-
-func (v *transferView) renderFileList(entries []FileEntry, selected int, _ bool, width int) string {
-	t := table.New(
-		table.WithColumns([]table.Column{
-			{Title: " ", Width: 2}, // Kolumna na gwiazdkę
-			{Title: "Name", Width: width - 37},
-			{Title: "Size", Width: 10},
-			{Title: "Modified", Width: 19},
-		}),
-	)
-
-	var rows []table.Row
-	for _, entry := range entries {
-		path := filepath.Join(v.getActivePanel().path, entry.name)
-		isMarked := v.model.IsSelected(path)
-
-		// Tworzenie wiersza
-		prefix := " "
-		if isMarked {
-			prefix = "*"
-		}
-
-		name := entry.name
-		if entry.isDir {
-			name = "[" + name + "]"
-		}
-
-		row := table.Row{
-			prefix,
-			name,
-			formatSize(entry.size),
-			entry.modTime.Format("2006-01-02 15:04"),
-		}
-		rows = append(rows, row)
-	}
-
-	t.SetRows(rows)
-
-	// Renderujemy tabelę
-	tableOutput := t.View()
-
-	// Teraz dodajemy kolory linijka po linijce
-	var coloredOutput strings.Builder
-	lines := strings.Split(tableOutput, "\n")
-
-	for i, line := range lines {
-		// Pomijamy linie nagłówka (pierwsza linia)
-		if i == 0 {
-			coloredOutput.WriteString(line + "\n")
-			continue
-		}
-
-		// Sprawdzamy czy ta linia odpowiada jakiemuś plikowi
-		entryIndex := i - 1 // odejmujemy 1 bo pierwsza linia to nagłówek
-		if entryIndex >= 0 && entryIndex < len(entries) {
-			entry := entries[entryIndex]
-			var style lipgloss.Style
-
-			// Specjalne traktowanie linii ".."
-			if entry.name == ".." {
-				if entryIndex == selected {
-					// Ten sam styl dla aktywnego i nieaktywnego panelu gdy ".." jest zaznaczone
-					style = lipgloss.NewStyle().
-						Bold(true).
-						Background(ui.Highlight).
-						Foreground(lipgloss.Color("0"))
-				} else {
-					style = ui.DirectoryStyle
-				}
-			} else if entryIndex == selected {
-				// Ten sam styl dla zaznaczenia w obu panelach
-				style = lipgloss.NewStyle().
-					Bold(true).
-					Background(ui.Highlight).
-					Foreground(lipgloss.Color("0"))
-			} else if entry.isDir {
-				// Katalogi zawsze używają DirectoryStyle
-				style = ui.DirectoryStyle
-			} else {
-				switch getFileType(entry) {
-				case "executable":
-					style = ui.ExecutableStyle
-				case "archive":
-					style = ui.ArchiveStyle
-				case "image":
-					style = ui.ImageStyle
-				case "document":
-					style = ui.DocumentStyle
-				case "code_c":
-					style = ui.CodeCStyle
-				case "code_h":
-					style = ui.CodeHStyle
-				case "code_go":
-					style = ui.CodeGoStyle
-				case "code_py":
-					style = ui.CodePyStyle
-				case "code_js":
-					style = ui.CodeJsStyle
-				case "code_json":
-					style = ui.CodeJsonStyle
-				default:
-					if strings.HasPrefix(getFileType(entry), "code_") {
-						style = ui.CodeDefaultStyle
-					} else {
-						style = ui.DefaultFileStyle
-					}
-				}
-			}
-			coloredOutput.WriteString(style.Render(line) + "\n")
-		} else {
-			coloredOutput.WriteString(line + "\n")
-		}
-	}
-
-	return coloredOutput.String()
 }
 
 func (v *transferView) ensureConnected() error {
@@ -1838,7 +1829,6 @@ func (v *transferView) ensureConnected() error {
 	var authData string
 
 	if host.PasswordID < 0 {
-		// Obsługa klucza SSH
 		keyIndex := -(host.PasswordID + 1)
 		keys := v.model.GetKeys()
 		if keyIndex >= len(keys) {
@@ -1852,7 +1842,6 @@ func (v *transferView) ensureConnected() error {
 		}
 		authData = keyPath
 	} else {
-		// Obsługa hasła
 		passwords := v.model.GetPasswords()
 		if host.PasswordID >= len(passwords) {
 			return fmt.Errorf("invalid password ID")
@@ -1888,40 +1877,39 @@ func (v *transferView) sendConnectionUpdate() tea.Cmd {
 	}
 }
 
-func (v *transferView) renderFooter() string {
-	var footerContent strings.Builder
+func (v *transferView) handleError(err error) {
+	v.errorMessage = err.Error()
+	time.AfterFunc(3*time.Second, func() {
+		v.errorMessage = ""
+	})
+}
 
-	// Komunikat o błędzie
-	if v.errorMessage != "" {
-		footerContent.WriteString(ui.ErrorStyle.Render("Error: " + v.errorMessage))
-		footerContent.WriteString("\n")
+// formatSize formatuje rozmiar pliku
+func formatSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
 	}
-
-	// Status
-	if v.statusMessage != "" {
-		style := ui.DescriptionStyle
-		if v.shouldShowDeleteConfirm() {
-			style = ui.ErrorStyle
-		} else if v.isWaitingForInput() {
-			style = ui.InputStyle
-		}
-		footerContent.WriteString(style.Render(v.statusMessage))
-		footerContent.WriteString("\n")
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
 	}
+	return fmt.Sprintf("%.1f %cB",
+		float64(size)/float64(div), "KMGTPE"[exp])
+}
 
-	// Komunikat o braku połączenia
-	if !v.connected && v.errorMessage == "" {
-		footerContent.WriteString(ui.ErrorStyle.Render(
-			"SFTP connection not established. Press 'q' to return to main menu and connect first."))
-		footerContent.WriteString("\n")
+// Pomocnicze funkcje
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
+	return b
+}
 
-	// Skróty klawiszowe
-	if v.connected {
-		footerContent.WriteString(v.renderShortcuts())
-	} else {
-		footerContent.WriteString(ui.ButtonStyle.Render("q") + " - Return to main menu")
+func max(a, b int) int {
+	if a > b {
+		return a
 	}
-
-	return footerContent.String()
+	return b
 }
