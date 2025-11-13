@@ -51,7 +51,7 @@ SSH Manager follows a modular, layered architecture:
 ## Technology Stack
 
 ### Core Languages and Frameworks
-- **Go 1.23**: Modern, efficient, compiled language with excellent concurrency support
+- **Go 1.24**: Modern, efficient, compiled language with excellent concurrency support
 - **Bubble Tea**: Elm-inspired TUI framework for building interactive terminal applications
 - **Lip Gloss**: CSS-like styling framework for terminal UIs
 

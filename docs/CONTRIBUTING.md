@@ -66,7 +66,7 @@ Application terminates with panic.
 ## Environment
 - OS: Ubuntu 22.04
 - Terminal: GNOME Terminal 3.44
-- Go Version: 1.23.3
+- Go Version: 1.24.2
 - sshm Version: 1.0.0
 
 ## Stack Trace
@@ -101,7 +101,7 @@ We welcome pull requests for:
 ## Development Setup
 
 ### Prerequisites
-- Go 1.23 or higher
+- Go 1.24 or higher
 - Git
 - Terminal with UTF-8 and color support
 - (Optional) golangci-lint for code linting
