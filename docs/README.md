@@ -32,4 +32,4 @@ If you need assistance or have questions, please visit the [Support section](../
 
 ---
 
-*Last updated: 2024-11-13*
+*Last updated: 2025-11-13*

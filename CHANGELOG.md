@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated Go version requirement to 1.24+
+- Updated dependencies:
+  - Bubble Tea to v1.3.10
+  - Bubbles to v0.21.0
+  - Lip Gloss to v1.1.0
+  - golang.org/x/crypto to v0.44.0
+  - golang.org/x/term to v0.37.0
+  - pkg/sftp to v1.13.10
+  - go-scp to v1.5.0
+  - containerd/console to v1.0.5
+
 ### Added
 - Comprehensive documentation suite
   - Installation guide

@@ -21,7 +21,7 @@ This guide provides detailed installation instructions for SSH Manager (sshm) ac
 
 ### Minimum Requirements
 - **Operating System**: Linux, macOS, or Windows (x64 or ARM64)
-- **Go Version**: 1.23 or higher (for building from source)
+- **Go Version**: 1.24 or higher (for building from source)
 - **Terminal**: UTF-8 compatible terminal with color support
 - **Disk Space**: ~10 MB for binary, additional space for configuration
 - **Memory**: ~50 MB RAM during operation

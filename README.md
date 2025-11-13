@@ -1,7 +1,7 @@
 # SSH Manager (sshm)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
 
 A modern, secure, terminal-based SSH connection manager with an intuitive TUI interface, encrypted credential storage, and optional cloud synchronization capabilities.
@@ -33,7 +33,7 @@ A modern, secure, terminal-based SSH connection manager with an intuitive TUI in
 ## 📦 Installation
 
 ### Prerequisites
-- Go 1.23 or higher
+- Go 1.24 or higher
 - Terminal with UTF-8 and color support
 
 ### From Source
@@ -174,7 +174,7 @@ All sensitive data is encrypted using **AES-256-GCM** encryption:
 
 ### Technology Stack
 
-- **Language**: Go 1.23
+- **Language**: Go 1.24
 - **UI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea) (TUI framework)
 - **Styling**: [Lip Gloss](https://github.com/charmbracelet/lipgloss)
 - **SSH**: [golang.org/x/crypto/ssh](https://pkg.go.dev/golang.org/x/crypto/ssh)
