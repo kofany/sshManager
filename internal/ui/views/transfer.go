@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // Dodaj na początku pliku po importach
@@ -402,56 +403,104 @@ func (v *transferView) renderModernFileList(p *Panel, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// Render individual file entry with modern styling
+// Render individual file entry with proper width handling
 func (v *transferView) renderFileEntry(entry FileEntry, marked bool, active bool, width int) string {
 	theme := ui.GetCurrentTheme()
 
-	// Selection indicator
-	indicator := " "
-	if marked {
-		indicator = "●"
+	// Fixed column widths for predictable layout
+	const (
+		markWidth = 2  // " " or "* "
+		iconWidth = 4  // "[D] " or "    "
+		sizeWidth = 10 // Right-aligned size column
+		dateWidth = 13 // "02 Jan 15:04"
+		spacing   = 3  // Total spaces between columns
+	)
+
+	// Calculate available width for filename
+	nameWidth := width - markWidth - iconWidth - sizeWidth - dateWidth - spacing
+	if nameWidth < 15 {
+		nameWidth = 15 // Minimum width for filename
 	}
 
-	// File icon
-	icon := v.getFileIcon(entry)
+	// Build indicator (mark)
+	mark := "  "
+	if marked {
+		mark = "* "
+	}
 
-	// File name with proper truncation
-	maxNameWidth := width - 25 // Reserve space for size, date, and indicators
+	// Build icon
+	icon := "    "
+	if entry.isDir {
+		if entry.name == ".." {
+			icon = "[<] "
+		} else {
+			icon = "[D] "
+		}
+	} else {
+		ext := strings.ToLower(filepath.Ext(entry.name))
+		switch ext {
+		case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
+			icon = "[Z] "
+		case ".go":
+			icon = "[G] "
+		case ".py":
+			icon = "[P] "
+		case ".js", ".ts":
+			icon = "[J] "
+		case ".exe", ".sh", ".bat", ".cmd":
+			icon = "[X] "
+		default:
+			if entry.mode&0111 != 0 {
+				icon = "[X] "
+			} else {
+				icon = "[ ] "
+			}
+		}
+	}
+
+	// Build filename with proper truncation using runewidth
 	displayName := entry.name
 	if entry.isDir && entry.name != ".." {
 		displayName = entry.name + "/"
 	}
-	if len(displayName) > maxNameWidth {
-		displayName = displayName[:maxNameWidth-3] + "..."
+
+	if runewidth.StringWidth(displayName) > nameWidth {
+		displayName = runewidth.Truncate(displayName, nameWidth-3, "...")
 	}
 
-	// Size formatting
+	namePadded := displayName
+	if w := runewidth.StringWidth(namePadded); w < nameWidth {
+		namePadded += strings.Repeat(" ", nameWidth-w)
+	}
+
 	sizeStr := formatSize(entry.size)
 	if entry.isDir {
 		sizeStr = "<DIR>"
 	}
+	sizeCol := fmt.Sprintf("%*s", sizeWidth, sizeStr)
 
-	// Date formatting
 	dateStr := entry.modTime.Format("02 Jan 15:04")
+	dateCol := fmt.Sprintf("%-*s", dateWidth, dateStr)
 
-	// Build the line
-	var lineStyle lipgloss.Style
-	var nameColor lipgloss.Color
-
-	if active {
-		// Active selection style
-		lineStyle = lipgloss.NewStyle().
-			Background(theme.Highlight).
-			Foreground(lipgloss.Color("#000000")).
-			Bold(true).
-			Width(width)
-
-		line := fmt.Sprintf(" %s %s %-*s %8s  %s",
-			indicator, icon, maxNameWidth, displayName, sizeStr, dateStr)
-		return lineStyle.Render(line)
+	plainLine := mark + icon + namePadded + " " + sizeCol + "  " + dateCol
+	plainWidth := runewidth.StringWidth(plainLine)
+	if plainWidth > width {
+		plainLine = runewidth.Truncate(plainLine, width, "")
+		plainWidth = width
+	} else if plainWidth < width {
+		plainLine += strings.Repeat(" ", width-plainWidth)
+		plainWidth = width
 	}
 
-	// Determine color based on file type
+	if active {
+		style := lipgloss.NewStyle().
+			Background(theme.Highlight).
+			Foreground(lipgloss.Color("#000000")).
+			Bold(true)
+		return style.Render(plainLine)
+	}
+
+	var nameColor lipgloss.Color
 	if entry.name == ".." {
 		nameColor = theme.DirectoryColor
 	} else if entry.isDir {
@@ -459,75 +508,29 @@ func (v *transferView) renderFileEntry(entry FileEntry, marked bool, active bool
 	} else {
 		nameColor = v.getFileColor(entry)
 	}
+	if len(string(nameColor)) == 0 {
+		nameColor = lipgloss.Color("#FFFFFF")
+	}
 
-	// Build line parts with individual styling
-	indicatorStyle := lipgloss.NewStyle().Foreground(theme.Special)
-	iconStyle := lipgloss.NewStyle().Foreground(nameColor)
+	markStyle := lipgloss.NewStyle().Foreground(theme.Special)
+	iconStyle := lipgloss.NewStyle().Foreground(nameColor).Bold(true)
 	nameStyle := lipgloss.NewStyle().Foreground(nameColor)
-	sizeStyle := lipgloss.NewStyle().Foreground(theme.Subtle)
-	dateStyle := lipgloss.NewStyle().Foreground(theme.Subtle)
+	sizeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#B0B0B0"))
+	dateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#B0B0B0"))
 
-	parts := []string{
-		" ",
-		indicatorStyle.Render(indicator),
-		" ",
-		iconStyle.Render(icon),
-		" ",
-		nameStyle.Render(fmt.Sprintf("%-*s", maxNameWidth, displayName)),
-		" ",
-		sizeStyle.Render(fmt.Sprintf("%8s", sizeStr)),
-		"  ",
-		dateStyle.Render(dateStr),
+	coloredLine := markStyle.Render(mark) +
+		iconStyle.Render(icon) +
+		nameStyle.Render(namePadded) +
+		" " +
+		sizeStyle.Render(sizeCol) +
+		"  " +
+		dateStyle.Render(dateCol)
+
+	if plainWidth < width {
+		coloredLine += strings.Repeat(" ", width-plainWidth)
 	}
 
-	line := strings.Join(parts, "")
-
-	// Ensure line fits width
-	lineRunes := []rune(line)
-	if len(lineRunes) > width {
-		line = string(lineRunes[:width])
-	} else if len(lineRunes) < width {
-		line = line + strings.Repeat(" ", width-len(lineRunes))
-	}
-
-	return line
-}
-
-// Get file icon based on type
-func (v *transferView) getFileIcon(entry FileEntry) string {
-	if entry.name == ".." {
-		return "↩"
-	}
-	if entry.isDir {
-		return "📁"
-	}
-
-	ext := strings.ToLower(filepath.Ext(entry.name))
-	switch ext {
-	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar":
-		return "📦"
-	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp":
-		return "🖼"
-	case ".txt", ".doc", ".docx", ".pdf", ".md":
-		return "📄"
-	case ".go":
-		return "🐹"
-	case ".py":
-		return "🐍"
-	case ".js", ".ts":
-		return "📜"
-	case ".json", ".yaml", ".yml", ".toml":
-		return "⚙"
-	case ".exe", ".sh", ".bat", ".cmd":
-		return "⚡"
-	case ".c", ".h", ".cpp", ".hpp":
-		return "©"
-	default:
-		if entry.mode&0111 != 0 {
-			return "⚙"
-		}
-		return "📃"
-	}
+	return coloredLine
 }
 
 // Get file color based on type
@@ -618,13 +621,13 @@ func (v *transferView) View() string {
 	panelWidth := (availableWidth - 6) / 2
 
 	// Render panels side by side
-	leftPanel := v.renderPanel(&v.localPanel, "📁 Local", panelWidth)
+	leftPanel := v.renderPanel(&v.localPanel, "LOCAL", panelWidth)
 
 	var rightPanel string
 	if !v.connected {
 		rightPanel = v.renderDisconnectedPanel(panelWidth)
 	} else {
-		rightPanel = v.renderPanel(&v.remotePanel, "🌐 Remote", panelWidth)
+		rightPanel = v.renderPanel(&v.remotePanel, "REMOTE", panelWidth)
 	}
 
 	panelsView := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, "  ", rightPanel)
@@ -662,25 +665,25 @@ func (v *transferView) View() string {
 func (v *transferView) renderTitleBar() string {
 	theme := ui.GetCurrentTheme()
 
-	title := "📁 File Transfer Manager"
+	title := "FILE TRANSFER"
 
 	var status string
 	var statusStyle lipgloss.Style
 
 	if v.connected {
 		if host := v.model.GetSelectedHost(); host != nil {
-			status = fmt.Sprintf("✓ Connected to %s (%s)", host.Name, host.IP)
+			status = fmt.Sprintf("[Connected to %s (%s)]", host.Name, host.IP)
 			statusStyle = lipgloss.NewStyle().
 				Foreground(theme.Special).
 				Bold(true)
 		}
 	} else if host := v.model.GetSelectedHost(); host != nil {
 		if v.connecting {
-			status = "⟳ Establishing connection..."
+			status = "[Establishing connection...]"
 			statusStyle = lipgloss.NewStyle().
 				Foreground(theme.Highlight)
 		} else {
-			status = fmt.Sprintf("✗ Not connected to %s", host.Name)
+			status = fmt.Sprintf("[Not connected to %s]", host.Name)
 			statusStyle = lipgloss.NewStyle().
 				Foreground(theme.Error)
 		}
@@ -690,7 +693,7 @@ func (v *transferView) renderTitleBar() string {
 		Foreground(theme.Highlight).
 		Bold(true)
 
-	return titleStyle.Render(title) + "  " + statusStyle.Render(status)
+	return titleStyle.Render(title) + " " + statusStyle.Render(status)
 }
 
 // Modern progress bar
@@ -720,7 +723,7 @@ func (v *transferView) renderModernProgressBar(width int) string {
 	}
 	speed := float64(v.progress.TransferredBytes) / elapsed
 
-	progressText := fmt.Sprintf("📤 %s  %s %3.0f%%  %s/s",
+	progressText := fmt.Sprintf("TRANSFER %s  %s %3.0f%%  %s/s",
 		v.progress.FileName,
 		bar,
 		percentage*100,
@@ -740,20 +743,20 @@ func (v *transferView) renderModernFooter() string {
 		errorStyle := lipgloss.NewStyle().
 			Foreground(theme.Error).
 			Bold(true)
-		return errorStyle.Render("✗ " + v.errorMessage)
+		return errorStyle.Render("[ERROR] " + v.errorMessage)
 	}
 
 	// Status message
 	if v.statusMessage != "" {
 		statusStyle := lipgloss.NewStyle().
 			Foreground(theme.Highlight)
-		return statusStyle.Render("ℹ " + v.statusMessage)
+		return statusStyle.Render("[STATUS] " + v.statusMessage)
 	}
 
 	if !v.connected {
 		disconnectedStyle := lipgloss.NewStyle().
 			Foreground(theme.Error)
-		return disconnectedStyle.Render("⚠ Not connected. Press 'q' to return to main menu.")
+		return disconnectedStyle.Render("[!] Not connected. Press 'q' to return to main menu.")
 	}
 
 	// Shortcuts bar
@@ -796,7 +799,7 @@ func (v *transferView) renderDisconnectedPanel(width int) string {
 		Bold(true).
 		Align(lipgloss.Center).
 		Width(width - 4).
-		Render("\n\n⚠ No SFTP Connection\n\nPress 'q' to return to main menu\nand connect to a host first")
+		Render("\n\n[!] No SFTP Connection\n\nPress 'q' to return to main menu\nand connect to a host first")
 
 	borderStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
