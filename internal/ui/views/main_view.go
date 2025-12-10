@@ -598,7 +598,7 @@ func (v *mainView) handleDelete() (tea.Model, tea.Cmd) {
 func (v *mainView) View() string {
 	// Przygotuj główną zawartość
 	var content strings.Builder
-	content.WriteString(ui.TitleStyle.Render("sshManager ❯ https://sshm.io") + "\n\n")
+	content.WriteString(ui.TitleStyle.Render("sshManager ❯ https://okkin.eu") + "\n\n")
 
 	// Główny layout w stylu MC z dwoma panelami
 	leftPanel := v.renderHostPanel()

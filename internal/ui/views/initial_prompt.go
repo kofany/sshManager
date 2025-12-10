@@ -140,7 +140,7 @@ func (m *initialPromptModel) View() string {
 / __/ __| '_ \| |\/| |/ _' | '_ \ / _' |/ _' |/ _ \ '__|
 \__ \__ \ | | | |  | | (_| | | | | (_| | (_| |  __/ |   
 |___/___/_| |_|_|  |_|\__,_|_| |_|\__,_|\__, |\___|_|   
-                        https://sshm.io |___/`
+                        https://okkin.eu |___/`
 
     asciiArtRendered := asciiArtStyle.Render(asciiArt)
 
@@ -340,7 +340,7 @@ func (m *ApiKeyPromptModel) View() string {
 / __/ __| '_ \| |\/| |/ _' | '_ \ / _' |/ _' |/ _ \ '__|
 \__ \__ \ | | | |  | | (_| | | | | (_| | (_| |  __/ |   
 |___/___/_| |_|_|  |_|\__,_|_| |_|\__,_|\__, |\___|_|   
-                        https://sshm.io |___/`
+                        https://okkin.eu |___/`
 
     asciiArtRendered := asciiArtStyle.Render(asciiArt)
 
@@ -348,7 +348,7 @@ func (m *ApiKeyPromptModel) View() string {
     configInfo := infoStyle.Render("Using config file: " + m.configPath)
 
     apiInfo := infoStyle.Render("Press ESC to work in local mode without synchronization\n" +
-        "If you don't have an API key, please register at https://sshm.io")
+        "If you don't have an API key, please register at https://okkin.eu")
 
     // Prompt dla API key
     apiKeyPrompt := promptStyle.Render("Enter API key: ")

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ApiBaseURL   = "https://sshm.io/api/v1/"
+	ApiBaseURL   = "https://okkin.eu/api/v1/"
 	KeyFilePerms = 0600
 )
 
